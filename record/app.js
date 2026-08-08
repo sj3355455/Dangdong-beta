@@ -1808,24 +1808,13 @@ function bestGameAvg(players){
   return best;
 }
 
-/* 순위 카드 묶음 (결산·최고 기록 공용) — 어느 기간을 넣든 같은 네 가지를 뽑는다.
-   승수(wins)는 쓰지 않는다: 다인전 1등과 2인전 1승이 같은 1승으로 세여 값이 뒤섞인다.
-   대신 모드를 가리지 않는 보정 승률(adjRate)로 '최고 승률'을 뽑는다. */
-function homeTopCards(D, badge, foot){
-  const pl = D.players;
-  const enough = pl.filter(p => p.games >= 2);   // 누적 평균인 승률만 표본을 요구한다
-  const bg = bestGameAvg(pl);
-  return [
-    [topOf(pl, p => p.games),         '최다 경기 수', '경기'],
-    [topOf(enough, p => p.adjRate),   '최고 승률',    '', fPct],
-    [bg, '한 경기 최고 에버리지', '', f3, bg ? ddmy(bg.date) + ' 경기' : ''],
-    [topOf(pl, p => p.bestHr),        '최고 하이런',  '점']
-  ].filter(([r]) => r).map(([r, label, unit, fmt, ownFoot]) => ({
+/* [1등, 라벨, 단위, 포맷, 이 카드만의 밑줄] 묶음 → 카드로. 1등이 없는 줄은 버린다. */
+const mkCards = (rows, badge, foot) => rows.filter(([r]) => r)
+  .map(([r, label, unit, fmt, ownFoot]) => ({
     badge, name: r.who.join(', '), player: r.who.length === 1 ? r.who[0] : null,
     big: (fmt ? fmt(r.v) : r.v) + (unit ? `<span class="un">${unit}</span>` : ''),
     label, foot: ownFoot || foot
   }));
-}
 
 // ── 이번 달 성장 — 하이런 신기록 → 수지 → 에버리지 → 승률 ──
 function homeGrowCards(){
@@ -1870,7 +1859,7 @@ function homeGrowCards(){
   }
 
   hrNew.sort((a, b) => b.d - a.d).slice(0, 3).forEach(g => out.push({
-    badge: '🔥 개인 최고 경신', name: g.c.name, player: g.c.name,
+    badge: '📈 이번 달 성장', name: g.c.name, player: g.c.name,
     big: arrow(g.b.bestHr, g.c.bestHr), label: '하이런 신기록',
     delta: '+' + g.d, foot: '지난 기록을 ' + cur.label + '에 갈아치웠습니다'
   }));
@@ -1896,19 +1885,37 @@ function homeGrowCards(){
   return out;
 }
 
-// ── 지난 달 결산 ──
+/* ── 지난 달 결산 ── 한 달을 '누가 잘했나'로 요약하는 자리라 전부 누적값이다.
+   승수(wins)는 쓰지 않는다: 다인전 1등과 2인전 1승이 같은 1승으로 세여 값이 뒤섞인다.
+   대신 모드를 가리지 않는 보정 승률(adjRate)로 '최고 승률'을 뽑는다. */
 function homeLastCards(){
   const M = monthData();
   if (!M.prevD.games.length) return [];
-  return homeTopCards(M.prevD, '🏅 ' + M.prev.label + ' 결산',
-                      M.prev.label + ' · ' + M.prevD.games.length + '경기 기준');
+  const pl = M.prevD.players;
+  const enough = pl.filter(p => p.games >= 2);   // 누적 평균은 한두 경기로 뒤집히지 않게
+  return mkCards([
+    [topOf(pl, p => p.games),        '최다 경기 수', '경기'],
+    [topOf(enough, p => p.adjRate),  '최고 승률',    '', fPct],
+    [topOf(enough, p => p.avgAvg),   '최고 에버리지', '', f3],
+    [topOf(pl, p => p.bestHr),       '최고 하이런',  '점']
+  ], '🏅 ' + M.prev.label + ' 결산',
+     M.prev.label + ' · ' + M.prevD.games.length + '경기 기준');
 }
 
-// ── 최고 기록 — 기간·정기전 필터와 무관한 통산 전체 ──
+/* ── 최고 기록 ── 기간·정기전 필터와 무관한 통산 전체.
+   여기만 에버리지가 '한 경기' 최고치다 — 결산은 그 달의 성적 요약이지만
+   이쪽은 깨지기 전까지 남는 기록판이라 그날 하루의 최고점을 올린다. */
 function homeBestCards(){
   const D = getFullProcessData();
   if (!D.games.length) return [];
-  return homeTopCards(D, '👑 통산 최고 기록', '지금까지 쌓인 ' + D.games.length + '경기 전체 기준');
+  const pl = D.players;
+  const enough = pl.filter(p => p.games >= 2);
+  const bg = bestGameAvg(pl);
+  return mkCards([
+    [bg, '한 경기 최고 에버리지', '', f3, bg ? ddmy(bg.date) + ' 경기' : ''],
+    [topOf(enough, p => p.hitRate), '최고 득점률', '', fPct],
+    [topOf(pl, p => p.bestHr),      '최고 하이런', '점']
+  ], '👑 통산 최고 기록', '지금까지 쌓인 ' + D.games.length + '경기 전체 기준');
 }
 
 // 고른 묶음이 비어 있으면 빈 화면 대신 안내 한 장
