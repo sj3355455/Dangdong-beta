@@ -23,6 +23,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2      # 직전 커밋의 sw.js 와 버전을 비교하려면 하나 더 필요하다
+
+      # 버전은 커밋 훅(.githooks/pre-commit)이 올린다. 여기는 그게 빠졌을 때를 받쳐 주는 안전망 —
+      # 버전이 그대로면 기기들이 새 배포를 못 알아채고 옛 화면에 머무르므로, 배포본에만 실행 번호를 덧붙인다.
+      - name: Verify app version bumped
+        run: |
+          ver() { sed -n "s/^const VERSION = '\(.*\)';.*$/\1/p" | head -1; }
+          now=$(ver < sw.js)
+          before=$(git show HEAD~1:sw.js 2>/dev/null | ver || true)
+          echo "이번 버전: ${now:-없음} / 직전 버전: ${before:-없음}"
+          if [ -z "$now" ]; then
+            echo "::error::sw.js 에서 VERSION 을 찾지 못했습니다."
+            exit 1
+          fi
+          if [ -n "$before" ] && [ "$now" = "$before" ]; then
+            new="$now-r${{ github.run_number }}"
+            echo "::warning::버전이 $now 그대로라 배포본에만 $new 로 올립니다. 커밋 훅을 켜 주세요 → git config core.hooksPath .githooks"
+            sed -i "s/^const VERSION = '.*';/const VERSION = '$new';/" sw.js
+          fi
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

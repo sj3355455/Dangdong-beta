@@ -1,6 +1,7 @@
 /* 당동 서비스 워커 — 오프라인 캐시 + 무중단 자동 업데이트
  *
- * ▶ 배포할 때는 아래 VERSION 한 줄만 올리면 된다(예: v170 → v171).
+ * ▶ 아래 VERSION 은 손대지 않는다 — 커밋할 때마다 .githooks/pre-commit 이 vN → vN+1 로 올린다.
+ *   (한 번만 켜 두면 된다: git config core.hooksPath .githooks)
  *   VERSION 이 바뀌면 이 파일 내용이 바뀌므로 브라우저가 "새 워커"로 감지 →
  *   설치(install) → 활성화(activate) → 제어권 교체(controllerchange) 순으로 진행되고,
  *   그 순간 앱이 자동으로 1회 새로고침된다(app.js 의 controllerchange 처리). 폴링 불필요.
@@ -10,7 +11,7 @@
  *  - 그 외 정적 자산(아이콘·매니페스트): 캐시 우선 + 백그라운드 갱신
  *  - 외부 출처(Supabase API 등): 가로채지 않음
  */
-const VERSION = 'v239';
+const VERSION = 'v240';
 // 배포 경로를 자동 감지 → 같은 코드가 /Dangdong/(본 앱)·/Dangdong-beta/(테스트)에서 그대로 동작.
 const BASE = new URL('.', self.location).pathname;   // 예: '/Dangdong/' 또는 '/Dangdong-beta/'
 const CACHE = 'dangdong' + BASE + VERSION;           // 스코프별 캐시 이름 분리(같은 origin이라 겹치면 안 됨)

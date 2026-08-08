@@ -377,7 +377,7 @@ function bindSwipe(grid){
   grid.addEventListener('pointerleave', end);
 }
 
-// ══ 한번에 투표 (붓 모드) ══
+// ══ 일괄 선택 (붓 모드) ══
 // 날짜 하나마다 시트를 열고 O/X 를 누르는 게 번거롭다. 표를 먼저 하나 골라 두고(붓)
 // 칸을 누르거나 쭉 쓸면 지나간 날이 전부 그 표가 된다. 한 번의 제스처가 한 번의 저장이다.
 let bulkMode = false;
@@ -386,7 +386,7 @@ let bulkMsgText = '', bulkMsgKind = '';   // 안내문은 다시 그려도 남�
 
 function bulkBarHtml(){
   if (!bulkMode) return `<div class="bulkbar" style="justify-content:flex-end">
-      <button type="button" class="bulkbtn" id="bulkOn">⚡ 한번에 투표</button>
+      <button type="button" class="bulkbtn" id="bulkOn">🖌️ 일괄 선택</button>
     </div>`;
   const on = b => brush === b ? ' on' : '';
   return `<div class="bulkbar">

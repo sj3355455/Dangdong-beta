@@ -1,0 +1,29 @@
+#!/bin/sh
+# ── 앱 버전 자동 올리기 ──────────────────────────────────────────────
+# sw.js 의 VERSION 은 화면에 찍히는 버전 표시이자 '자동 새로고침 신호'다.
+# 이 값이 바뀌어야 브라우저가 새 서비스워커로 알아채고 전 기기가 한 번 새로고침된다.
+# 그래서 커밋이 만들어질 때마다 여기서 vN → vN+1 로 올려 그 커밋에 같이 담는다.
+# 손으로 고칠 일이 없고, 본앱.bat·테스트앱.bat·git commit 어느 쪽으로 커밋해도 똑같이 걸린다.
+#
+# 한 번만 켜 두면 된다 :  git config core.hooksPath .githooks
+# 이번만 건너뛰려면    :  git commit --no-verify
+# ────────────────────────────────────────────────────────────────────
+set -e
+
+# 하위 폴더에서 커밋해도 경로가 맞도록 최상위로 올라간다
+cd "$(git rev-parse --show-toplevel)"
+SW=sw.js
+[ -f "$SW" ] || exit 0
+
+cur=$(sed -n "s/^const VERSION = 'v\([0-9][0-9]*\)';.*$/\1/p" "$SW" | head -1)
+if [ -z "$cur" ]; then
+  echo "pre-commit: sw.js 에서 VERSION 을 찾지 못했습니다 — 버전을 올리지 못했습니다." >&2
+  echo "            \"const VERSION = 'v123';\" 형식이 맞는지 확인해 주세요." >&2
+  echo "            (이대로 커밋하려면: git commit --no-verify)" >&2
+  exit 1
+fi
+
+next=$((cur + 1))
+sed -i "s/^const VERSION = 'v[0-9][0-9]*';/const VERSION = 'v$next';/" "$SW"
+git add -- "$SW"
+echo "pre-commit: 앱 버전 v$cur → v$next"
