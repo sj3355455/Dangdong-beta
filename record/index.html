@@ -207,6 +207,39 @@ a.pl:hover{color:var(--accent);border-color:var(--accent)}
 .calft button{flex:1;padding:9px 0;border-radius:9px;border:1px solid var(--line);
   background:var(--card);color:var(--muted);font-size:.85rem;cursor:pointer}
 .calft button:hover{color:var(--accent);border-color:var(--accent)}
+/* ══ 홈 — 이번 달 하이라이트 카드 ══
+   세로로 긴 카드 한 장씩 3초마다 넘어간다. 카드들은 같은 자리에 겹쳐 두고
+   보이는 것만 .on — 높이가 제일 긴 카드에 맞춰 흔들리지 않게 min-height 로 고정. */
+.home{max-width:420px;margin:0 auto}
+.hcar{position:relative;border-radius:18px;overflow:hidden;background:var(--card);
+  border:1px solid var(--line);min-height:min(64vh,460px);
+  box-shadow:0 8px 24px -18px rgba(0,0,0,.6);touch-action:pan-y;user-select:none}
+.hslide{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;text-align:center;padding:36px 22px;gap:12px;
+  opacity:0;transform:translateY(10px);transition:opacity .4s ease,transform .4s ease;
+  pointer-events:none}
+.hslide.on{opacity:1;transform:none;pointer-events:auto}
+.hbadge{font-size:.76rem;font-weight:700;letter-spacing:.03em;padding:5px 13px;border-radius:999px;
+  background:var(--bg);border:1px solid var(--line);color:var(--muted)}
+.hname{font-size:1.85rem;font-weight:800;letter-spacing:-.02em;line-height:1.25;word-break:keep-all}
+a.hname{color:var(--text);text-decoration:none;border-bottom:1px dashed var(--muted);cursor:pointer}
+a.hname:hover{color:var(--accent);border-color:var(--accent)}
+.hbig{font-size:2.5rem;font-weight:800;font-style:italic;letter-spacing:-.03em;
+  color:var(--accent);line-height:1.15;word-break:keep-all}
+.hbig .ar{font-style:normal;color:var(--muted);font-size:1.5rem;margin:0 10px;vertical-align:middle}
+.hbig .un{font-style:normal;font-size:1.3rem;margin-left:3px}
+.hlabel{font-size:1.02rem;font-weight:700}
+.hfoot{font-size:.78rem;color:var(--muted);margin-top:2px}
+.hdelta{font-size:.85rem;font-weight:700;padding:3px 11px;border-radius:999px;
+  background:var(--bg);border:1px solid var(--line);color:var(--accent)}
+/* 남은 시간 막대 — 카드가 바뀔 때마다 애니메이션을 다시 튼다 */
+.hbar{position:absolute;left:0;top:0;height:3px;width:0;background:var(--accent);opacity:.8}
+@keyframes hgrow{from{width:0}to{width:100%}}
+.hbar.run{animation:hgrow 3s linear forwards}
+.hdots{display:flex;justify-content:center;flex-wrap:wrap;gap:7px;margin-top:14px}
+.hdot{width:7px;height:7px;padding:0;border:none;border-radius:50%;background:var(--line);
+  cursor:pointer;transition:transform .2s,background .2s}
+.hdot.on{background:var(--accent);transform:scale(1.35)}
 /* ══ 플레이 성향 (MBTI식 수직선) ══ */
 .tend{display:flex;flex-direction:column;gap:18px}
 .tlab{display:flex;justify-content:space-between;font-size:.85rem;color:var(--muted);margin-bottom:7px;font-weight:600}
@@ -238,7 +271,8 @@ a.pl:hover{color:var(--accent);border-color:var(--accent)}
 
   <div class="tabs" style="flex-wrap:nowrap; margin-bottom:16px;">
     <div style="display:flex; gap:4px; align-items:center;">
-      <button class="tab on" data-v="rank">🏆 순위</button>
+      <button class="tab on" data-v="home">🏠 홈</button>
+      <button class="tab" data-v="rank">🏆 순위</button>
       <button class="tab" data-v="games">🕒 경기</button>
       <button id="btnMyRec" class="tab" style="display:none;">📊 내 기록</button>
     </div>
@@ -246,7 +280,7 @@ a.pl:hover{color:var(--accent);border-color:var(--accent)}
   <div id="view"></div>
   <div style="text-align:center; margin-top:30px; margin-bottom:16px; display:flex; align-items:center; justify-content:center; gap:8px;">
     <button class="linkbtn" id="btnLogout" style="display:none;">로그아웃 (처음으로)</button>
-    <span style="font-size:0.75rem; color:var(--muted);" data-app-version>v225</span>
+    <span style="font-size:0.75rem; color:var(--muted);" data-app-version>v237</span>
   </div>
 </div>
 <!-- ══ 설정 모달 ══ -->

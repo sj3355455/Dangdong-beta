@@ -10,6 +10,8 @@ let rankTo = '';     // 조회 종료일 (둘 다 ''이면 통산)
 let gamesMode = '통합';
 const GAMES_PAGE = 20;   // 경기 탭에서 한 번에 그리는 경기 수 (아래로 내리면 이만큼씩 더)
 let gamesIO = null;      // 경기 목록 무한 스크롤 관찰자 (화면을 벗어나면 끊는다)
+let RAW_HDCP = [];       // 수지 변경 이력 (handicap_history) — 홈 탭의 '수지 상승' 카드용
+let homeTimer = null;    // 홈 카드 자동 넘김 타이머 (화면을 바꿀 때 끊는다)
 
 // ── 정기전 필터 ──
 // 경기는 날짜가 아니라 정기전(club_events)에 붙어 있다. 날짜 범위로는 "정기전 날에 낀
@@ -99,6 +101,7 @@ function clearProcessCache() {
   fullProcessCache = null;
   filteredDataCache = null;
   filteredCacheKey = '';
+  monthCache = { key: '', data: null };   // 홈 탭의 이번 달/지난 달 집계도 같이 버린다
 }
 
 function getFullProcessData() {
@@ -150,6 +153,17 @@ async function fetchGames() {
     HAS_EVENTS = false;
     return await get('id,played_at,players');
   }
+}
+
+// 수지 변경 이력. handicap-history.sql 을 아직 안 돌린 DB에서도 홈 탭이 통째로 죽지 않게
+// 실패하면 빈 배열 — 수지 상승 카드만 안 뜬다. (팀 구분이 없는 테이블이라 소속 팀 회원으로 걸러 쓴다)
+async function fetchHandicapHistory(){
+  if (!currentTeam) return [];
+  try {
+    const rows = await sbFetch('/rest/v1/handicap_history'
+      + '?select=player_id,old_handicap,new_handicap,changed_at&order=changed_at.asc');
+    return Array.isArray(rows) ? rows : [];
+  } catch(e){ return []; }
 }
 
 // 정기전 목록 (캘린더에서 관리자가 등록한 것). 기록실에서는 읽기만 한다.
@@ -268,6 +282,7 @@ async function reloadData(){
   RAW_GAMES = await fetchGames();
   RAW_MEMBERS = await fetchMembers().catch(() => RAW_MEMBERS);
   RAW_EVENTS = await fetchEvents();
+  RAW_HDCP = await fetchHandicapHistory();   // 수지를 고친 직후면 이력이 한 줄 늘어 있다
   DATA = getFilteredData();
 }
 const NO_PERM = '권한이 없습니다. 관리자 계정으로 로그인했는지 확인하세요.';
@@ -1712,6 +1727,219 @@ function openAdminTeamEditModal(team){
   };
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+   홈 — 이번 달 하이라이트 (세로 카드 한 장씩 3초마다)
+
+   다른 탭과 달리 조회 기간·정기전 필터를 따르지 않는다. "이번 달 / 지난 달"이
+   카드의 뜻 자체라서, 사용자가 순위 탭에서 잡아 둔 기간에 따라 내용이 바뀌면
+   같은 문구가 다른 의미가 돼 버린다. 홈은 언제나 달력 기준 이번 달·지난 달.
+   ══════════════════════════════════════════════════════════════════════ */
+
+// off=0 이번 달, -1 지난 달. 달의 첫날~마지막날을 YYYY-MM-DD 로.
+function monthOf(off){
+  const n = new Date();
+  const s = new Date(n.getFullYear(), n.getMonth() + off, 1);
+  const e = new Date(s.getFullYear(), s.getMonth() + 1, 0);   // 다음 달 0일 = 이번 달 말일
+  return { from: ymd(s), to: ymd(e), label: s.getFullYear() + '년 ' + (s.getMonth() + 1) + '월' };
+}
+
+let monthCache = { key: '', data: null };
+function monthData(){
+  const key = RAW_GAMES.length + '|' + todayYmd();
+  if (monthCache.key === key && monthCache.data) return monthCache.data;
+  const cur = monthOf(0), prev = monthOf(-1);
+  const at = g => ymd(new Date(g.played_at));
+  const data = {
+    cur, prev,
+    curD:  processData(RAW_GAMES.filter(g => inRange(at(g), cur.from, cur.to)), RAW_MEMBERS),
+    prevD: processData(RAW_GAMES.filter(g => inRange(at(g), prev.from, prev.to)), RAW_MEMBERS),
+    // 하이런 '경신' 판정용 — 이번 달 이전 통산
+    befD:  processData(RAW_GAMES.filter(g => at(g) < cur.from), RAW_MEMBERS)
+  };
+  monthCache = { key, data };
+  return data;
+}
+
+// 선수 식별 — processData 와 같은 규칙(회원은 계정 id, 게스트는 이름)으로 달을 넘겨 이어 붙인다
+const pKey = p => p.id ? ('id:' + p.id) : ('nm:' + p.name);
+const pMap = d => { const m = {}; for (const p of d.players) m[pKey(p)] = p; return m; };
+const f3 = v => v.toFixed(3);
+const arrow = (a, b) => a + '<span class="ar">→</span>' + b;
+
+function homeSlides(){
+  const M = monthData();
+  const cur = M.cur, prev = M.prev;
+  const C = pMap(M.curD), P = pMap(M.prevD), B = pMap(M.befD);
+  const out = [];
+
+  // ── 0) 인트로 ──
+  out.push({
+    badge: '🏠 ' + cur.label,
+    big: M.curD.games.length + '<span class="un">경기</span>',
+    label: M.curD.games.length ? '이번 달 기록' : '이번 달은 아직 조용하네요',
+    foot: M.curD.games.length
+      ? '선수 ' + M.curD.players.length + '명 · 지난달 ' + M.prevD.games.length + '경기'
+      : '한 게임 치고 오면 여기가 채워집니다'
+  });
+
+  // ── 1) 수지 상승 (handicap_history) ──
+  // 한 달에 여러 번 바뀌었으면 처음 값 → 마지막 값 하나로 합친다.
+  const memName = {};
+  for (const m of (RAW_MEMBERS || [])) if (m && m.id) memName[m.id] = m.display_name;
+  const hd = {};
+  for (const h of RAW_HDCP) {
+    if (h.old_handicap == null || h.new_handicap == null) continue;
+    if (!memName[h.player_id]) continue;                                  // 다른 팀 회원은 뺀다
+    if (!inRange(String(h.changed_at || '').slice(0, 10), cur.from, cur.to)) continue;
+    const e = hd[h.player_id] || (hd[h.player_id] = { from: h.old_handicap });
+    e.to = h.new_handicap;
+  }
+  Object.keys(hd).map(id => ({ id, ...hd[id] }))
+    .filter(e => e.to > e.from)
+    .sort((a, b) => (b.to - b.from) - (a.to - a.from))
+    .forEach(e => out.push({
+      badge: '📈 이번 달 성장', name: memName[e.id], player: memName[e.id],
+      big: arrow(e.from * 10, e.to * 10), label: '수지 상승',
+      delta: '+' + (e.to - e.from) * 10, foot: cur.label
+    }));
+
+  // ── 2) 에버리지 상승 (지난달 대비) ──
+  // 한두 경기 뽑기로 뒤집히지 않게 양쪽 달 모두 2경기 이상인 사람만
+  const avgUp = [];
+  const rateUp = [];
+  const hrNew = [];
+  for (const k in C) {
+    const c = C[k], p = P[k], b = B[k];
+    if (p && c.games >= 2 && p.games >= 2) {
+      if (p.avgAvg > 0 && c.avgAvg > p.avgAvg) avgUp.push({ c, p, d: c.avgAvg - p.avgAvg });
+      if (c.games >= 3 && p.games >= 3 && c.winRate > p.winRate + 0.5)
+        rateUp.push({ c, p, d: c.winRate - p.winRate });
+    }
+    // 하이런은 '지난달보다'보다 '통산 최고 경신'이 훨씬 값진 소식이라 이전 전체와 비교한다
+    if (b && b.bestHr > 0 && c.bestHr > b.bestHr) hrNew.push({ c, b, d: c.bestHr - b.bestHr });
+  }
+  avgUp.sort((a, b) => b.d - a.d).slice(0, 3).forEach(g => out.push({
+    badge: '📈 이번 달 성장', name: g.c.name, player: g.c.name,
+    big: arrow(f3(g.p.avgAvg), f3(g.c.avgAvg)), label: '에버리지 상승',
+    delta: '+' + f3(g.d),
+    foot: '지난달 ' + g.p.games + '경기 → 이번달 ' + g.c.games + '경기'
+  }));
+
+  // ── 3) 하이런 신기록 ──
+  hrNew.sort((a, b) => b.d - a.d).slice(0, 3).forEach(g => out.push({
+    badge: '🔥 개인 최고 경신', name: g.c.name, player: g.c.name,
+    big: arrow(g.b.bestHr, g.c.bestHr), label: '하이런 신기록',
+    delta: '+' + g.d, foot: '지난 기록을 ' + cur.label + '에 갈아치웠습니다'
+  }));
+
+  // ── 4) 승률 상승 ──
+  rateUp.sort((a, b) => b.d - a.d).slice(0, 2).forEach(g => out.push({
+    badge: '📈 이번 달 성장', name: g.c.name, player: g.c.name,
+    big: arrow(Math.round(g.p.winRate) + '%', Math.round(g.c.winRate) + '%'), label: '승률 상승',
+    delta: '+' + Math.round(g.d) + '%p',
+    foot: '지난달 ' + g.p.games + '경기 → 이번달 ' + g.c.games + '경기'
+  }));
+
+  // ── 5) 지난 달 결산 ──
+  // 값이 같으면 공동 — 이름을 나란히 적는다(그럴 땐 눌러서 넘어갈 곳이 없으니 링크는 안 건다).
+  const top = (players, val) => {
+    let best = -Infinity, who = [];
+    for (const p of players) {
+      const v = val(p);
+      if (v == null || !(v > 0)) continue;
+      if (v > best) { best = v; who = [p.name]; }
+      else if (v === best) who.push(p.name);
+    }
+    return who.length ? { v: best, who } : null;
+  };
+  if (M.prevD.games.length) {
+    const badge = '🏅 ' + prev.label + ' 결산';
+    const pl = M.prevD.players;
+    const rec = [
+      [top(pl, p => p.games),                              '최다 경기 수', '경기'],
+      [top(pl, p => p.wins),                               '최다 승리',    '승'],
+      [top(pl.filter(p => p.games >= 2), p => p.avgAvg),   '최고 에버리지', '', f3],
+      [top(pl, p => p.bestHr),                             '최고 하이런',  '점']
+    ];
+    for (const [r, label, unit, fmt] of rec) {
+      if (!r) continue;
+      out.push({
+        badge, name: r.who.join(', '), player: r.who.length === 1 ? r.who[0] : null,
+        big: (fmt ? fmt(r.v) : r.v) + (unit ? `<span class="un">${unit}</span>` : ''),
+        label, foot: prev.label + ' · ' + M.prevD.games.length + '경기 기준'
+      });
+    }
+  }
+  return out;
+}
+
+const homeSlideHtml = (s, i) => `<div class="hslide${i === 0 ? ' on' : ''}">
+    <div class="hbadge">${esc(s.badge)}</div>
+    ${s.name ? (s.player
+        ? `<a class="hname" data-p="${esc(s.player)}">${esc(s.name)}</a>`
+        : `<div class="hname">${esc(s.name)}</div>`) : ''}
+    <div class="hbig">${s.big}</div>
+    <div class="hlabel">${esc(s.label)}</div>
+    ${s.delta ? `<div class="hdelta">${esc(s.delta)}</div>` : ''}
+    ${s.foot ? `<div class="hfoot">${esc(s.foot)}</div>` : ''}
+  </div>`;
+
+function renderHome(){
+  const slides = homeSlides();
+  const el = $(`<div class="home">
+    <div class="hcar">
+      <div class="hbar"></div>
+      ${slides.map(homeSlideHtml).join('')}
+    </div>
+    <div class="hdots">${slides.map((s, i) =>
+      `<button class="hdot${i === 0 ? ' on' : ''}" data-i="${i}" aria-label="${i + 1}번째 카드"></button>`
+    ).join('')}</div>
+    <div class="sub" style="text-align:center; margin:12px 0 0">
+      ${slides.length > 1 ? '3초마다 넘어갑니다 · 좌우로 밀거나 점을 눌러 이동'
+                          : '경기가 쌓이면 이번 달 성장 기록이 여기에 뜹니다'}
+    </div>
+  </div>`);
+
+  const items = [...el.querySelectorAll('.hslide')];
+  const dots  = [...el.querySelectorAll('.hdot')];
+  const bar   = el.querySelector('.hbar');
+  let idx = 0;
+  const go = n => {
+    idx = (n + items.length) % items.length;
+    items.forEach((e, i) => e.classList.toggle('on', i === idx));
+    dots.forEach((d, i) => d.classList.toggle('on', i === idx));
+    // 막대는 클래스를 뗐다 붙여 애니메이션을 처음부터 다시 튼다 (사이에 reflow 강제)
+    bar.classList.remove('run');
+    void bar.offsetWidth;
+    if (items.length > 1) bar.classList.add('run');
+  };
+  const restart = () => {
+    if (homeTimer) clearInterval(homeTimer);
+    homeTimer = null;
+    if (items.length < 2) return;
+    // 다른 탭에 가 있는 동안은 넘기지 않는다 — 돌아왔을 때 여러 장 건너뛴 것처럼 보이지 않게
+    homeTimer = setInterval(() => { if (!document.hidden) go(idx + 1); }, 3000);
+  };
+
+  dots.forEach(d => d.onclick = () => { go(+d.dataset.i); restart(); });
+  el.querySelectorAll('a.hname').forEach(a => a.onclick = () => showPlayer(a.dataset.p));
+
+  const car = el.querySelector('.hcar');
+  let sx = 0, sy = 0;
+  car.addEventListener('touchstart', e => {
+    const t = e.changedTouches[0]; sx = t.clientX; sy = t.clientY;
+  }, { passive: true });
+  car.addEventListener('touchend', e => {
+    const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+    // 세로로 더 많이 움직였으면 스크롤이지 넘기기가 아니다
+    if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) { go(idx + (dx < 0 ? 1 : -1)); restart(); }
+  }, { passive: true });
+
+  go(0);
+  restart();
+  return el;
+}
+
 function renderGames(){
   const modeSel = `<select class="field pg-mode" style="flex:0 0 auto; width:84px; height:34px; padding:0 26px 0 8px; font-size:0.9rem; border-radius:8px; margin:0;">` +
     MODE_TABS.map(m => `<option value="${m}" ${m===gamesMode?'selected':''}>${m}</option>`).join('') +
@@ -1856,20 +2084,22 @@ async function initDashboard() {
   if (sub) sub.textContent = '서버에서 데이터를 불러오는 중입니다...';
   try {
     await loadTeams();   // 현재 팀 확정 후 그 팀 게임만 로드
-    const [games, members, adm, events] = await Promise.all([
+    const [games, members, adm, events, hdcp] = await Promise.all([
       fetchGames(),
       fetchMembers().catch(() => []),
       fetchAdmin(),
-      fetchEvents()
+      fetchEvents(),
+      fetchHandicapHistory()
     ]);
     RAW_GAMES = games;
     RAW_MEMBERS = members;
     IS_ADMIN = adm;
     RAW_EVENTS = events;
+    RAW_HDCP = hdcp;
     DATA = getFilteredData();
     if (sub) sub.textContent = '최종 업데이트 ' + DATA.updated + ' · 총 ' + DATA.games.length + '경기 · 선수 ' + DATA.players.length + '명';
-    const t = new URLSearchParams(location.search).get('tab') || 'rank';
-    if (t === 'me') { show('rank'); openMeModal(); }   // 점수판에서 넘어온 내 정보 딥링크 → 팝업
+    const t = new URLSearchParams(location.search).get('tab') || 'home';
+    if (t === 'me') { show('home'); openMeModal(); }   // 점수판에서 넘어온 내 정보 딥링크 → 팝업
     else show(t);
   } catch(e) { if (sub) sub.textContent = '데이터를 불러오는데 실패했습니다.'; }
 }
@@ -1879,6 +2109,7 @@ function show(v){
   if(v==='me'){ openMeModal(); return; }   // 내 정보는 팝업 모달로 (기본 화면 유지)
   if(chartRO){ chartRO.disconnect(); chartRO = null; }
   if(gamesIO){ gamesIO.disconnect(); gamesIO = null; }
+  if(homeTimer){ clearInterval(homeTimer); homeTimer = null; }
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on', t.dataset.v===v));
   
   const auth = getAuth();
@@ -1913,6 +2144,7 @@ function show(v){
   let node;
   if(v==='rank') node = renderRank();
   else if(v==='games') node = renderGames();
+  else node = renderHome();   // 홈이 기본 — 주소창에 엉뚱한 tab= 이 와도 빈 화면이 되지 않게
   document.getElementById('view').replaceChildren(node);
   syncRankSticky();
 }
