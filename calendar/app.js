@@ -193,6 +193,20 @@ function describeCountErr(e){
 }
 
 // ══ 화면 ══
+// 칸 셋째 줄 — 정기전 칩 · 인원수 · 판수. 붓 모드가 칸 하나만 다시 그릴 때도 이걸 쓴다.
+function cellR3Html(key){
+  const ev = events[key], g = gameCnt[key], c = counts[key] || { o: 0, x: 0 };
+  const past = isPast(key);
+  // 지난 날의 참여 투표는 이미 의미가 없다 → 인원수를 지우고 그날 실제로 있었던 일만 남긴다.
+  const showVotes = !past && !ev && (c.o || c.x);
+  // 판수는 날짜가 지난 뒤에만. 오늘 친 판수를 바로 띄우면 아직 유효한 O/X 와 자리를 다툰다.
+  const showGames = past && g;
+  return showGames ? `<span class="gchip">🎱 ${g}판</span>`
+    : ev ? `<span class="evchip">${ev.round_no ? esc(ev.round_no) + '회' : '정기전'}</span>`
+    : showVotes ? `<b class="vo">${c.o}</b><i class="vsep">/</i><b class="vx">${c.x}</b>`
+    : '';
+}
+
 function render(){
   const view = $('#view');
   const auth = getAuth();
@@ -245,14 +259,10 @@ function render(){
       if (!key) { cells += '<div class="cell pad"></div>'; continue; }
       const d = Number(key.slice(8));
       const dow = new Date(y, m, d).getDay();
-      const ev = events[key], g = gameCnt[key], c = counts[key] || { o: 0, x: 0 }, mv = myChoice(key);
-      // 지난 날의 참여 투표는 이미 의미가 없다 → 인원수·내 표·표시 테두리를 모두 지우고
-      // 그날 실제로 있었던 일(정기전·판수)만 남긴다.
+      const ev = events[key], mv = myChoice(key);
+      // 지난 날의 참여 투표는 이미 의미가 없다 → 내 표·표시 테두리를 지우고
+      // 그날 실제로 있었던 일(정기전·판수)만 남긴다. 셋째 줄은 cellR3Html 이 같은 기준으로 판단한다.
       const past = key < today;
-      // 정기전 날은 칸 전체를 칠해서 알린다 — 좁은 칸에 인원수까지 넣으면 줄이 넘친다.
-      const showVotes = !past && !ev && (c.o || c.x);
-      // 판수는 날짜가 지난 뒤에만. 오늘 친 판수를 바로 띄우면 아직 유효한 O/X 와 자리를 다툰다.
-      const showGames = past && g;
       const cls = ['cell'];
       if (ev) cls.push('event');
       if (key === today) cls.push('today');
@@ -268,12 +278,7 @@ function render(){
       cells += `<div class="${cls.join(' ')}" data-d="${key}">
         <span class="r1"><span class="dnum${dcls}">${d}</span></span>
         <span class="rbar" style="height:${barBox}px"></span>
-        <span class="r3">${
-          showGames ? `<span class="gchip">🎱 ${g}판</span>`
-          : ev ? `<span class="evchip">${ev.round_no ? esc(ev.round_no) + '회' : '정기전'}</span>`
-          : showVotes ? `<b class="vo">${c.o}</b><i class="vsep">/</i><b class="vx">${c.x}</b>`
-          : ''
-        }</span>
+        <span class="r3">${cellR3Html(key)}</span>
       </div>`;
     }
     weeks += `<div class="week"><div class="wrow">${cells}</div>`
@@ -295,20 +300,27 @@ function render(){
       <b>${y}년 ${m + 1}월</b>
       <button class="mbtn" id="nextM" aria-label="다음 달">›</button>
     </div>
+    ${bulkBarHtml()}
     <div class="dow">${DOW.map((w, i) => `<span class="${i === 0 ? 'sun' : i === 6 ? 'sat' : ''}">${w}</span>`).join('')}</div>
-    <div class="gridclip"><div class="grid" id="grid">${weeks}</div></div>
-    <div class="sub" style="text-align:center; margin:14px 0 20px;">
+    <div class="gridclip"><div class="grid${bulkMode ? ' paint' : ''}" id="grid">${weeks}</div></div>
+    ${bulkMode ? '' : `<div class="sub" style="text-align:center; margin:14px 0 20px;">
       날짜를 눌러 참여 가능 여부를 남기세요. 누가 골랐는지는 공개되지 않습니다.
-    </div>
+    </div>`}
     ${topDaysHtml()}
   `;
 
   $('#prevM').onclick = () => moveMonth(-1);
   $('#nextM').onclick = () => moveMonth(1);
-  document.querySelectorAll('#grid .cell[data-d]').forEach(el => {
-    el.onclick = () => { if (!swallowClick()) openDay(el.dataset.d); };
-  });
-  bindSwipe($('#grid'));
+  bindBulkBar();
+  // 붓 모드에서는 칸을 눌러도 시트가 열리지 않는다 — 누른 자리가 곧 표다.
+  if (bulkMode) {
+    bindPaint($('#grid'));
+  } else {
+    document.querySelectorAll('#grid .cell[data-d]').forEach(el => {
+      el.onclick = () => { if (!swallowClick()) openDay(el.dataset.d); };
+    });
+    bindSwipe($('#grid'));
+  }
 }
 
 // ══ 좌우 드래그로 달 넘기기 ══
@@ -363,6 +375,183 @@ function bindSwipe(grid){
   grid.addEventListener('pointerup', end);
   grid.addEventListener('pointercancel', end);
   grid.addEventListener('pointerleave', end);
+}
+
+// ══ 한번에 투표 (붓 모드) ══
+// 날짜 하나마다 시트를 열고 O/X 를 누르는 게 번거롭다. 표를 먼저 하나 골라 두고(붓)
+// 칸을 누르거나 쭉 쓸면 지나간 날이 전부 그 표가 된다. 한 번의 제스처가 한 번의 저장이다.
+let bulkMode = false;
+let brush = 'o';            // 'o' | 'x' | null(지우기 — 표를 없앤다)
+let bulkMsgText = '', bulkMsgKind = '';   // 안내문은 다시 그려도 남아야 해서 상태로 둔다
+
+function bulkBarHtml(){
+  if (!bulkMode) return `<div class="bulkbar" style="justify-content:flex-end">
+      <button type="button" class="bulkbtn" id="bulkOn">⚡ 한번에 투표</button>
+    </div>`;
+  const on = b => brush === b ? ' on' : '';
+  return `<div class="bulkbar">
+      <div class="brushes" id="brushes">
+        <button type="button" class="o${on('o')}" data-b="o" aria-pressed="${brush === 'o'}">⭕ 가능</button>
+        <button type="button" class="x${on('x')}" data-b="x" aria-pressed="${brush === 'x'}">❌ 불가</button>
+        <button type="button" class="c${on(null)}" data-b="" aria-pressed="${brush === null}">지우기</button>
+      </div>
+      <button type="button" class="bulkbtn done" id="bulkOff">완료</button>
+    </div>
+    <div class="sub bulkhint">고른 표시로 날짜를 누르거나 가로로 쓸어 보세요 · 달 이동은 ‹ › 로</div>
+    <div class="bulkmsg${bulkMsgKind ? ' ' + bulkMsgKind : ''}" id="bulkMsg">${esc(bulkMsgText)}</div>`;
+}
+
+function bindBulkBar(){
+  const on = $('#bulkOn');
+  if (on) on.onclick = () => { bulkMode = true; bulkMsg(''); render(); };
+  const off = $('#bulkOff');
+  if (off) off.onclick = () => { bulkMode = false; bulkMsg(''); render(); };
+  const bs = $('#brushes');
+  if (bs) bs.querySelectorAll('button').forEach(b => {
+    b.onclick = () => {
+      brush = b.dataset.b || null;
+      bs.querySelectorAll('button').forEach(o => {
+        const sel = (o.dataset.b || null) === brush;
+        o.classList.toggle('on', sel);
+        o.setAttribute('aria-pressed', sel);
+      });
+      bulkMsg('');
+    };
+  });
+}
+
+function bulkMsg(t, kind){
+  bulkMsgText = t || ''; bulkMsgKind = kind || '';
+  const el = $('#bulkMsg');
+  if (el) { el.textContent = bulkMsgText; el.className = 'bulkmsg' + (bulkMsgKind ? ' ' + bulkMsgKind : ''); }
+}
+
+// 내 표를 화면 쪽에서만 먼저 바꾼다 (숫자·테두리). 서버 저장은 제스처가 끝난 뒤 한 번에.
+function applyLocal(key, next){
+  const prev = myChoice(key);
+  const c = counts[key] || (counts[key] = { o: 0, x: 0, hours: [], reasons: [] });
+  if (prev) c[prev] = Math.max(0, c[prev] - 1);
+  if (next) c[next] = (c[next] || 0) + 1;
+  // 캐시가 myVote 를 얕게 복사하므로 기존 객체를 고치지 않고 새 객체로 갈아 끼운다
+  if (next) myVote[key] = { c: next, slots: next === 'o' ? SLOT_ALL : null, from: null, to: null };
+  else delete myVote[key];
+}
+
+// 칸 하나만 다시 칠한다 — 칠하는 도중에 render() 를 부르면 손가락 밑의 격자가 통째로 갈려 나간다.
+function repaintCell(el, key){
+  const mv = myChoice(key), past = isPast(key);
+  el.classList.toggle('vo', mv === 'o' && !past);
+  el.classList.toggle('vx', mv === 'x' && !past);
+  const r3 = el.querySelector('.r3');
+  if (r3) r3.innerHTML = cellR3Html(key);
+}
+
+// 붓 모드의 칠하기. 달 넘기기 스와이프와 손이 겹치므로 이 모드에선 스와이프를 끄고 ‹ › 만 남긴다.
+//
+// 손가락 하나로 세 가지를 가려야 한다 — 톡 누르기(한 칸), 가로로 쓸기(여러 칸), 세로로 밀기(화면 스크롤).
+// 그래서 격자는 touch-action:pan-y 그대로 두고(세로는 브라우저에 맡긴다), 방향이 정해지기 전에는
+// 아무것도 칠하지 않는다. 누르자마자 칠해 버리면 스크롤하려던 손에 표가 찍힌다.
+function bindPaint(grid){
+  if (!grid) return;
+  let painting = false, decided = false, freehand = false;
+  let x0 = 0, y0 = 0, startEl = null;
+  let changed = null;        // key → 바꾸기 전의 내 표 (실패하면 이걸로 되돌린다)
+
+  const cellAt = (x, y) => {
+    const el = document.elementFromPoint(x, y);
+    return el && el.closest ? el.closest('#grid .cell[data-d]') : null;
+  };
+
+  const touch = el => {
+    if (!el || !changed) return;
+    const key = el.dataset.d;
+    // 한 제스처 안에서 이미 지나간 칸은 다시 건드리지 않는다 (손이 왔다 갔다 해도 결과가 같도록)
+    if (!key || changed.has(key)) return;
+    if (isPast(key)) return bulkMsg('지난 날짜에는 투표할 수 없습니다.', 'err');
+    if (myChoice(key) === brush) return;           // 이미 그 표면 쓸 일이 없다
+    changed.set(key, myVote[key] || null);
+    applyLocal(key, brush);
+    repaintCell(el, key);
+    vibTick();
+  };
+
+  const stop = () => { painting = false; decided = false; startEl = null; changed = null; };
+
+  grid.addEventListener('pointerdown', e => {
+    if (!e.isPrimary) return;
+    x0 = e.clientX; y0 = e.clientY;
+    startEl = cellAt(x0, y0);
+    painting = true; decided = false;
+    // 마우스는 세로로 끌어도 화면이 스크롤되지 않는다 → 방향을 가릴 필요 없이 자유롭게 칠한다
+    freehand = e.pointerType === 'mouse';
+    changed = new Map();
+    try { grid.setPointerCapture(e.pointerId); } catch(err){}
+  });
+
+  grid.addEventListener('pointermove', e => {
+    if (!painting || !e.isPrimary) return;
+    const dx = e.clientX - x0, dy = e.clientY - y0;
+    if (!decided) {
+      if (Math.abs(dx) < SWIPE_SLOP && Math.abs(dy) < SWIPE_SLOP) return;   // 아직 톡 누른 것일 수도
+      // 세로로 미는 손은 스크롤이다 — 표를 하나도 남기지 않고 물러난다
+      if (!freehand && Math.abs(dy) >= Math.abs(dx)) return stop();
+      decided = true;
+      touch(startEl);                 // 이제야 시작 칸부터 칠한다
+    }
+    touch(cellAt(e.clientX, e.clientY));
+  });
+
+  const end = e => {
+    if (!painting) return;
+    try { grid.releasePointerCapture(e.pointerId); } catch(err){}
+    if (!decided) touch(startEl);     // 움직임 없이 뗀 손 = 한 칸 톡 누르기
+    const m = changed;
+    stop();
+    if (m && m.size) flushBulk(m);
+  };
+  grid.addEventListener('pointerup', end);
+  // 세로 스크롤이 시작되면 브라우저가 포인터를 가져간다 — 그때까지 칠한 건 그대로 저장한다
+  grid.addEventListener('pointercancel', end);
+}
+
+// 제스처 한 번에 바뀐 날들을 한 번의 요청으로 저장한다 (표 세우기 / 지우기 각각 한 방).
+let bulkPending = 0;   // 아직 답을 기다리는 저장 수 — 마지막 하나가 끝날 때만 서버 값을 다시 읽는다
+                       // (앞선 저장의 응답으로 다시 읽으면, 그 사이 칠한 칸이 잠깐 원래대로 돌아가 보인다)
+
+async function flushBulk(changes){
+  const auth = getAuth();
+  if (!auth || !currentTeam) return;
+  const b = brush;                       // 저장하는 사이에 붓이 바뀌어도 안내문이 어긋나지 않게
+  const n = changes.size;
+  const keys = [...changes.keys()];
+
+  updateMonthCache();
+  bulkMsg(`${n}일 저장 중...`);
+  render();                              // 요약(모이기 좋은 날)까지 새 값으로 — 제스처는 이미 끝났다
+
+  bulkPending++;
+  let saved = false;
+  try {
+    const sets = keys.filter(k => myChoice(k));
+    const dels = keys.filter(k => !myChoice(k));
+    if (sets.length) await upsertVotes(sets.map(k => rowFor(k, myVote[k])));
+    if (dels.length) await sbFetch(`/rest/v1/day_votes?team_id=eq.${currentTeam}&user_id=eq.${auth.uid}`
+      + `&vote_date=in.(${dels.join(',')})`, { method: 'DELETE' });
+    saved = true;
+  } catch(e){
+    for (const [k, prev] of changes) {
+      applyLocal(k, prev && prev.c);
+      if (prev) myVote[k] = prev;        // 시간대(slots)까지 그대로 되살린다
+    }
+    updateMonthCache();
+    bulkMsg(`저장하지 못했습니다: ${errText(e)}`, 'err');
+    render();
+  } finally { bulkPending--; }
+
+  if (!saved) return;
+  bulkMsg(b ? `${n}일을 ${b === 'o' ? '가능으로' : '불가로'} 저장했습니다.` : `${n}일의 표를 지웠습니다.`, 'ok');
+  if (!bulkPending) await refresh(true); // 서버 집계(시간대별 인원)를 다시 읽어 맞춘다
+  else { updateMonthCache(); render(); }
 }
 
 // 이번 달에서 모이기 좋은 날 — 가능 인원이 많고 불가 인원이 적은 순.

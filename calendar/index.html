@@ -60,6 +60,25 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
   color:var(--text);font-size:1.1rem;line-height:1;cursor:pointer}
 .mbtn:active{background:var(--hover)}
 
+/* ══ 한번에 투표 (붓 모드) ══ */
+/* 날짜마다 시트를 열고 닫는 게 번거로워서, O/X 를 하나 골라 두고 칸을 눌러(또는 쓸어) 한 번에 남긴다. */
+.bulkbar{display:flex;align-items:center;gap:6px;margin:0 0 10px}
+.bulkbtn{flex:0 0 auto;padding:9px 12px;border-radius:10px;background:var(--card);border:1px solid var(--line);
+  color:var(--muted);font-weight:700;font-size:.85rem;font-family:inherit;cursor:pointer;white-space:nowrap}
+.bulkbtn:active{background:var(--hover)}
+.bulkbtn.done{background:var(--accent);border-color:var(--accent);color:#fff}
+.brushes{flex:1 1 auto;display:flex;gap:5px;min-width:0}
+.brushes button{flex:1 1 0;min-width:0;padding:9px 2px;border:1.5px solid var(--line);border-radius:10px;
+  background:var(--card);color:var(--muted);font-size:.85rem;font-weight:700;font-family:inherit;
+  cursor:pointer;white-space:nowrap;overflow:hidden}
+.brushes button:active{transform:scale(.97)}
+.brushes button.o.on{background:var(--ok);border-color:var(--ok);color:var(--card)}
+.brushes button.x.on{background:var(--no);border-color:var(--no);color:var(--card)}
+.brushes button.c.on{background:var(--muted);border-color:var(--muted);color:var(--card)}
+.bulkhint{text-align:center;margin:0 0 8px;font-size:.78rem}
+.bulkmsg{text-align:center;font-size:.82rem;min-height:1.2em;margin-bottom:6px;color:var(--muted)}
+.bulkmsg.err{color:var(--no)} .bulkmsg.ok{color:var(--ok)}
+
 /* ══ 달력 격자 ══ */
 .dow{display:grid;grid-template-columns:repeat(7,1fr);gap:var(--gap);margin-bottom:4px}
 .dow span{text-align:center;font-size:.78rem;color:var(--muted);font-weight:600;padding:2px 0}
@@ -69,6 +88,9 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
 .gridclip{overflow:hidden}
 /* touch-action:pan-y — 세로 스크롤은 브라우저에 맡기고 가로 제스처만 달 넘기기로 받는다 */
 .grid{display:flex;flex-direction:column;gap:var(--gap);touch-action:pan-y}
+/* 붓 모드에서도 세로 스크롤은 브라우저 몫(pan-y)이다 — 가로로 쓸 때만 칠한다.
+   대신 끌면서 날짜 글자가 선택되는 건 막는다. */
+.grid.paint{-webkit-user-select:none;user-select:none}
 .week{position:relative}
 .wrow{display:grid;grid-template-columns:repeat(7,1fr);gap:var(--gap)}
 /* 일정 막대는 칸 위에 얹되 탭은 통과시킨다 (칸을 눌러 날짜 상세가 열려야 하므로) */
