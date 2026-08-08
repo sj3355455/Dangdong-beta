@@ -1774,9 +1774,48 @@ const f3 = v => v.toFixed(3);
 const fPct = v => v.toFixed(1) + '%';   // 보정 승률 — 통합 순위표와 같은 자릿수
 const arrow = (a, b) => a + '<span class="ar">→</span>' + b;
 
-function homeSlides(){
+const HOME_TABS = [
+  { k: 'grow', t: '이번 달 성장' },
+  { k: 'last', t: '지난 달 결산' },
+  { k: 'best', t: '최고 기록' }
+];
+let homeTab = 'grow';
+
+/* 1등 뽑기 — 값이 같으면 공동으로 이름을 나란히 적는다.
+   (그럴 땐 눌러서 넘어갈 곳이 하나가 아니므로 renderHome 에서 링크를 안 건다) */
+function topOf(players, val){
+  let best = -Infinity, who = [];
+  for (const p of players) {
+    const v = val(p);
+    if (v == null || !(v > 0)) continue;
+    if (v > best) { best = v; who = [p.name]; }
+    else if (v === best) who.push(p.name);
+  }
+  return who.length ? { v: best, who } : null;
+}
+
+/* 순위 카드 묶음 (결산·최고 기록 공용) — 어느 기간을 넣든 같은 네 가지를 뽑는다.
+   승수(wins)는 쓰지 않는다: 다인전 1등과 2인전 1승이 같은 1승으로 세여 값이 뒤섞인다.
+   대신 모드를 가리지 않는 보정 승률(adjRate)로 '최고 승률'을 뽑는다. */
+function homeTopCards(D, badge, foot){
+  const pl = D.players;
+  const enough = pl.filter(p => p.games >= 2);
+  return [
+    [topOf(pl, p => p.games),         '최다 경기 수', '경기'],
+    [topOf(enough, p => p.adjRate),   '최고 승률',    '', fPct],
+    [topOf(enough, p => p.avgAvg),    '최고 에버리지', '', f3],
+    [topOf(pl, p => p.bestHr),        '최고 하이런',  '점']
+  ].filter(([r]) => r).map(([r, label, unit, fmt]) => ({
+    badge, name: r.who.join(', '), player: r.who.length === 1 ? r.who[0] : null,
+    big: (fmt ? fmt(r.v) : r.v) + (unit ? `<span class="un">${unit}</span>` : ''),
+    label, foot
+  }));
+}
+
+// ── 이번 달 성장 — 하이런 신기록 → 수지 → 에버리지 → 승률 ──
+function homeGrowCards(){
   const M = monthData();
-  const cur = M.cur, prev = M.prev;
+  const cur = M.cur;
   const C = pMap(M.curD), P = pMap(M.prevD), B = pMap(M.befD);
   const out = [];
 
@@ -1815,14 +1854,12 @@ function homeSlides(){
     if (b && b.bestHr > 0 && c.bestHr > b.bestHr) hrNew.push({ c, b, d: c.bestHr - b.bestHr });
   }
 
-  // ══ 1) 하이런 신기록 ══
   hrNew.sort((a, b) => b.d - a.d).slice(0, 3).forEach(g => out.push({
     badge: '🔥 개인 최고 경신', name: g.c.name, player: g.c.name,
     big: arrow(g.b.bestHr, g.c.bestHr), label: '하이런 신기록',
     delta: '+' + g.d, foot: '지난 기록을 ' + cur.label + '에 갈아치웠습니다'
   }));
 
-  // ══ 2) 이번 달 성장 — 수지 → 에버리지 → 승률 ══
   hdUp.forEach(e => out.push({
     badge: '📈 이번 달 성장', name: memName[e.id], player: memName[e.id],
     big: arrow(e.from * 10, e.to * 10), label: '수지 상승',
@@ -1841,45 +1878,37 @@ function homeSlides(){
     foot: '지난달 ' + g.p.games + '경기 → 이번달 ' + g.c.games + '경기'
   }));
 
-  // ══ 3) 지난 달 결산 ══
-  // 값이 같으면 공동 — 이름을 나란히 적는다(그럴 땐 눌러서 넘어갈 곳이 없으니 링크는 안 건다).
-  const top = (players, val) => {
-    let best = -Infinity, who = [];
-    for (const p of players) {
-      const v = val(p);
-      if (v == null || !(v > 0)) continue;
-      if (v > best) { best = v; who = [p.name]; }
-      else if (v === best) who.push(p.name);
-    }
-    return who.length ? { v: best, who } : null;
-  };
-  if (M.prevD.games.length) {
-    const badge = '🏅 ' + prev.label + ' 결산';
-    const pl = M.prevD.players;
-    const rec = [
-      // 승수(wins)는 쓰지 않는다 — 다인전 1등과 2인전 1승이 같은 1승으로 세여 값이 뒤섞인다.
-      // 대신 모드를 가리지 않는 보정 승률로 '최고 승률'을 뽑는다.
-      [top(pl, p => p.games),                              '최다 경기 수', '경기'],
-      [top(pl.filter(p => p.games >= 2), p => p.adjRate),  '최고 승률',    '', fPct],
-      [top(pl.filter(p => p.games >= 2), p => p.avgAvg),   '최고 에버리지', '', f3],
-      [top(pl, p => p.bestHr),                             '최고 하이런',  '점']
-    ];
-    for (const [r, label, unit, fmt] of rec) {
-      if (!r) continue;
-      out.push({
-        badge, name: r.who.join(', '), player: r.who.length === 1 ? r.who[0] : null,
-        big: (fmt ? fmt(r.v) : r.v) + (unit ? `<span class="un">${unit}</span>` : ''),
-        label, foot: prev.label + ' · ' + M.prevD.games.length + '경기 기준'
-      });
-    }
-  }
-
-  // 이번 달도 지난 달도 기록이 없으면 카드가 한 장도 없다 — 빈 화면 대신 안내 한 장
-  if (!out.length) out.push({
-    badge: '🏠 ' + cur.label, big: '🎱', label: '아직 전해 드릴 소식이 없어요',
-    foot: '경기가 쌓이면 성장 기록이 여기에 뜹니다'
-  });
   return out;
+}
+
+// ── 지난 달 결산 ──
+function homeLastCards(){
+  const M = monthData();
+  if (!M.prevD.games.length) return [];
+  return homeTopCards(M.prevD, '🏅 ' + M.prev.label + ' 결산',
+                      M.prev.label + ' · ' + M.prevD.games.length + '경기 기준');
+}
+
+// ── 최고 기록 — 기간·정기전 필터와 무관한 통산 전체 ──
+function homeBestCards(){
+  const D = getFullProcessData();
+  if (!D.games.length) return [];
+  return homeTopCards(D, '👑 통산 최고 기록', '지금까지 쌓인 ' + D.games.length + '경기 전체 기준');
+}
+
+// 고른 묶음이 비어 있으면 빈 화면 대신 안내 한 장
+const HOME_EMPTY = {
+  grow: ['📈 이번 달 성장', '이번 달 성장 소식은 아직이에요', '지난달과 견줄 기록이 쌓이면 여기에 뜹니다'],
+  last: ['🏅 지난 달 결산', '지난 달 기록이 없어요', '한 달 치가 쌓이면 결산이 만들어집니다'],
+  best: ['👑 통산 최고 기록', '아직 기록이 없어요', '첫 경기를 치면 여기가 채워집니다']
+};
+function homeSlides(){
+  const cards = homeTab === 'last' ? homeLastCards()
+              : homeTab === 'best' ? homeBestCards()
+              : homeGrowCards();
+  if (cards.length) return cards;
+  const [badge, label, foot] = HOME_EMPTY[homeTab] || HOME_EMPTY.grow;
+  return [{ badge, big: '🎱', label, foot }];
 }
 
 const homeSlideHtml = (s, i) => `<div class="hslide${i === 0 ? ' on' : ''}">
@@ -1896,6 +1925,9 @@ const homeSlideHtml = (s, i) => `<div class="hslide${i === 0 ? ' on' : ''}">
 function renderHome(){
   const slides = homeSlides();
   const el = $(`<div class="home">
+    <div class="hseg seg">${HOME_TABS.map(t =>
+      `<button class="h-tab${t.k === homeTab ? ' on' : ''}" data-k="${t.k}">${t.t}</button>`
+    ).join('')}</div>
     <div class="hcar">
       <div class="hbar"></div>
       ${slides.map(homeSlideHtml).join('')}
@@ -1904,8 +1936,7 @@ function renderHome(){
       `<button class="hdot${i === 0 ? ' on' : ''}" data-i="${i}" aria-label="${i + 1}번째 카드"></button>`
     ).join('')}</div>
     <div class="sub" style="text-align:center; margin:12px 0 0">
-      ${slides.length > 1 ? '3초마다 넘어갑니다 · 누르고 있으면 멈추고, 좌우로 밀거나 점을 눌러 이동'
-                          : '경기가 쌓이면 이번 달 성장 기록이 여기에 뜹니다'}
+      ${slides.length > 1 ? '3초마다 넘어갑니다 · 누르고 있으면 멈추고, 좌우로 밀거나 점을 눌러 이동' : ''}
     </div>
   </div>`);
 
@@ -1959,6 +1990,7 @@ function renderHome(){
   document.addEventListener('visibilitychange', homeVis);
 
   dots.forEach(d => d.onclick = () => go(+d.dataset.i));
+  el.querySelectorAll('.h-tab').forEach(b => b.onclick = () => { homeTab = b.dataset.k; show('home'); });
   el.querySelectorAll('a.hname').forEach(a => a.onclick = () => showPlayer(a.dataset.p));
 
   let sx = 0, sy = 0;

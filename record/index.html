@@ -211,6 +211,9 @@ a.pl:hover{color:var(--accent);border-color:var(--accent)}
    세로로 긴 카드 한 장씩 3초마다 넘어간다. 카드들은 같은 자리에 겹쳐 두고
    보이는 것만 .on — 높이가 제일 긴 카드에 맞춰 흔들리지 않게 min-height 로 고정. */
 .home{max-width:420px;margin:0 auto}
+/* 묶음 전환 (이번 달 성장 | 지난 달 결산 | 최고 기록) — .seg 를 폭 꽉 채워 3등분 */
+.hseg{display:flex;width:100%;margin:0 0 12px}
+.hseg button{flex:1 1 0;min-width:0;padding:8px 2px;font-size:.85rem}
 .hcar{position:relative;border-radius:18px;overflow:hidden;background:var(--card);
   border:1px solid var(--line);min-height:min(64vh,460px);
   box-shadow:0 8px 24px -18px rgba(0,0,0,.6);touch-action:pan-y;user-select:none}
