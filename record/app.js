@@ -1771,6 +1771,7 @@ function monthData(){
 const pKey = p => p.id ? ('id:' + p.id) : ('nm:' + p.name);
 const pMap = d => { const m = {}; for (const p of d.players) m[pKey(p)] = p; return m; };
 const f3 = v => v.toFixed(3);
+const fPct = v => v.toFixed(1) + '%';   // 보정 승률 — 통합 순위표와 같은 자릿수
 const arrow = (a, b) => a + '<span class="ar">→</span>' + b;
 
 function homeSlides(){
@@ -1804,8 +1805,11 @@ function homeSlides(){
     const c = C[k], p = P[k], b = B[k];
     if (p && c.games >= 2 && p.games >= 2) {
       if (p.avgAvg > 0 && c.avgAvg > p.avgAvg) avgUp.push({ c, p, d: c.avgAvg - p.avgAvg });
-      if (c.games >= 3 && p.games >= 3 && c.winRate > p.winRate + 0.5)
-        rateUp.push({ c, p, d: c.winRate - p.winRate });
+      // 승률은 반드시 보정 승률(adjRate). 홈 카드는 모드를 안 가리고 한 달을 통째로 묶는데
+      // 원시 승률(wins/games)은 1등만 세서 다인전 2등이 꼴등과 같은 0점 취급이 된다.
+      // 통합 순위표의 '승률' 열도 adjRate 다 (COLS_ALL) — 표와 카드가 다른 수를 말하면 안 된다.
+      if (c.games >= 3 && p.games >= 3 && c.adjRate > p.adjRate + 0.5)
+        rateUp.push({ c, p, d: c.adjRate - p.adjRate });
     }
     // 하이런은 '지난달보다'보다 '통산 최고 경신'이 훨씬 값진 소식이라 이전 전체와 비교한다
     if (b && b.bestHr > 0 && c.bestHr > b.bestHr) hrNew.push({ c, b, d: c.bestHr - b.bestHr });
@@ -1832,8 +1836,8 @@ function homeSlides(){
   }));
   rateUp.sort((a, b) => b.d - a.d).slice(0, 2).forEach(g => out.push({
     badge: '📈 이번 달 성장', name: g.c.name, player: g.c.name,
-    big: arrow(Math.round(g.p.winRate) + '%', Math.round(g.c.winRate) + '%'), label: '승률 상승',
-    delta: '+' + Math.round(g.d) + '%p',
+    big: arrow(fPct(g.p.adjRate), fPct(g.c.adjRate)), label: '승률 상승',
+    delta: '+' + g.d.toFixed(1) + '%p',
     foot: '지난달 ' + g.p.games + '경기 → 이번달 ' + g.c.games + '경기'
   }));
 
@@ -1853,8 +1857,10 @@ function homeSlides(){
     const badge = '🏅 ' + prev.label + ' 결산';
     const pl = M.prevD.players;
     const rec = [
+      // 승수(wins)는 쓰지 않는다 — 다인전 1등과 2인전 1승이 같은 1승으로 세여 값이 뒤섞인다.
+      // 대신 모드를 가리지 않는 보정 승률로 '최고 승률'을 뽑는다.
       [top(pl, p => p.games),                              '최다 경기 수', '경기'],
-      [top(pl, p => p.wins),                               '최다 승리',    '승'],
+      [top(pl.filter(p => p.games >= 2), p => p.adjRate),  '최고 승률',    '', fPct],
       [top(pl.filter(p => p.games >= 2), p => p.avgAvg),   '최고 에버리지', '', f3],
       [top(pl, p => p.bestHr),                             '최고 하이런',  '점']
     ];
