@@ -12,6 +12,12 @@ const GAMES_PAGE = 20;   // 경기 탭에서 한 번에 그리는 경기 수 (�
 let gamesIO = null;      // 경기 목록 무한 스크롤 관찰자 (화면을 벗어나면 끊는다)
 let RAW_HDCP = [];       // 수지 변경 이력 (handicap_history) — 홈 탭의 '수지 상승' 카드용
 let homeTimer = null;    // 홈 카드 자동 넘김 타이머 (화면을 바꿀 때 끊는다)
+let homeVis = null;      // 홈 카드의 visibilitychange 핸들러 (같이 떼야 새 화면에 남지 않는다)
+// 홈을 떠날 때 정리 — 화면을 바꾸는 곳(show/showPlayer)마다 불러 준다
+function stopHome(){
+  if (homeTimer) { clearTimeout(homeTimer); homeTimer = null; }
+  if (homeVis) { document.removeEventListener('visibilitychange', homeVis); homeVis = null; }
+}
 
 // ── 정기전 필터 ──
 // 경기는 날짜가 아니라 정기전(club_events)에 붙어 있다. 날짜 범위로는 "정기전 날에 낀
@@ -1264,6 +1270,7 @@ function renderTendency(name){
 }
 
 function showPlayer(name){
+  stopHome();   // 홈 카드에서 이름을 눌러 들어온 경우 — show() 를 안 거치므로 여기서 끊는다
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
   const auth = getAuth();
   if(auth && name === auth.name) {
@@ -1772,17 +1779,7 @@ function homeSlides(){
   const C = pMap(M.curD), P = pMap(M.prevD), B = pMap(M.befD);
   const out = [];
 
-  // ── 0) 인트로 ──
-  out.push({
-    badge: '🏠 ' + cur.label,
-    big: M.curD.games.length + '<span class="un">경기</span>',
-    label: M.curD.games.length ? '이번 달 기록' : '이번 달은 아직 조용하네요',
-    foot: M.curD.games.length
-      ? '선수 ' + M.curD.players.length + '명 · 지난달 ' + M.prevD.games.length + '경기'
-      : '한 게임 치고 오면 여기가 채워집니다'
-  });
-
-  // ── 1) 수지 상승 (handicap_history) ──
+  // ── 수지 상승 (handicap_history) ──
   // 한 달에 여러 번 바뀌었으면 처음 값 → 마지막 값 하나로 합친다.
   const memName = {};
   for (const m of (RAW_MEMBERS || [])) if (m && m.id) memName[m.id] = m.display_name;
@@ -1794,16 +1791,11 @@ function homeSlides(){
     const e = hd[h.player_id] || (hd[h.player_id] = { from: h.old_handicap });
     e.to = h.new_handicap;
   }
-  Object.keys(hd).map(id => ({ id, ...hd[id] }))
+  const hdUp = Object.keys(hd).map(id => ({ id, ...hd[id] }))
     .filter(e => e.to > e.from)
-    .sort((a, b) => (b.to - b.from) - (a.to - a.from))
-    .forEach(e => out.push({
-      badge: '📈 이번 달 성장', name: memName[e.id], player: memName[e.id],
-      big: arrow(e.from * 10, e.to * 10), label: '수지 상승',
-      delta: '+' + (e.to - e.from) * 10, foot: cur.label
-    }));
+    .sort((a, b) => (b.to - b.from) - (a.to - a.from));
 
-  // ── 2) 에버리지 상승 (지난달 대비) ──
+  // ── 성적 변화 (지난달 대비) ──
   // 한두 경기 뽑기로 뒤집히지 않게 양쪽 달 모두 2경기 이상인 사람만
   const avgUp = [];
   const rateUp = [];
@@ -1818,21 +1810,26 @@ function homeSlides(){
     // 하이런은 '지난달보다'보다 '통산 최고 경신'이 훨씬 값진 소식이라 이전 전체와 비교한다
     if (b && b.bestHr > 0 && c.bestHr > b.bestHr) hrNew.push({ c, b, d: c.bestHr - b.bestHr });
   }
-  avgUp.sort((a, b) => b.d - a.d).slice(0, 3).forEach(g => out.push({
-    badge: '📈 이번 달 성장', name: g.c.name, player: g.c.name,
-    big: arrow(f3(g.p.avgAvg), f3(g.c.avgAvg)), label: '에버리지 상승',
-    delta: '+' + f3(g.d),
-    foot: '지난달 ' + g.p.games + '경기 → 이번달 ' + g.c.games + '경기'
-  }));
 
-  // ── 3) 하이런 신기록 ──
+  // ══ 1) 하이런 신기록 ══
   hrNew.sort((a, b) => b.d - a.d).slice(0, 3).forEach(g => out.push({
     badge: '🔥 개인 최고 경신', name: g.c.name, player: g.c.name,
     big: arrow(g.b.bestHr, g.c.bestHr), label: '하이런 신기록',
     delta: '+' + g.d, foot: '지난 기록을 ' + cur.label + '에 갈아치웠습니다'
   }));
 
-  // ── 4) 승률 상승 ──
+  // ══ 2) 이번 달 성장 — 수지 → 에버리지 → 승률 ══
+  hdUp.forEach(e => out.push({
+    badge: '📈 이번 달 성장', name: memName[e.id], player: memName[e.id],
+    big: arrow(e.from * 10, e.to * 10), label: '수지 상승',
+    delta: '+' + (e.to - e.from) * 10, foot: cur.label
+  }));
+  avgUp.sort((a, b) => b.d - a.d).slice(0, 3).forEach(g => out.push({
+    badge: '📈 이번 달 성장', name: g.c.name, player: g.c.name,
+    big: arrow(f3(g.p.avgAvg), f3(g.c.avgAvg)), label: '에버리지 상승',
+    delta: '+' + f3(g.d),
+    foot: '지난달 ' + g.p.games + '경기 → 이번달 ' + g.c.games + '경기'
+  }));
   rateUp.sort((a, b) => b.d - a.d).slice(0, 2).forEach(g => out.push({
     badge: '📈 이번 달 성장', name: g.c.name, player: g.c.name,
     big: arrow(Math.round(g.p.winRate) + '%', Math.round(g.c.winRate) + '%'), label: '승률 상승',
@@ -1840,7 +1837,7 @@ function homeSlides(){
     foot: '지난달 ' + g.p.games + '경기 → 이번달 ' + g.c.games + '경기'
   }));
 
-  // ── 5) 지난 달 결산 ──
+  // ══ 3) 지난 달 결산 ══
   // 값이 같으면 공동 — 이름을 나란히 적는다(그럴 땐 눌러서 넘어갈 곳이 없으니 링크는 안 건다).
   const top = (players, val) => {
     let best = -Infinity, who = [];
@@ -1870,6 +1867,12 @@ function homeSlides(){
       });
     }
   }
+
+  // 이번 달도 지난 달도 기록이 없으면 카드가 한 장도 없다 — 빈 화면 대신 안내 한 장
+  if (!out.length) out.push({
+    badge: '🏠 ' + cur.label, big: '🎱', label: '아직 전해 드릴 소식이 없어요',
+    foot: '경기가 쌓이면 성장 기록이 여기에 뜹니다'
+  });
   return out;
 }
 
@@ -1895,7 +1898,7 @@ function renderHome(){
       `<button class="hdot${i === 0 ? ' on' : ''}" data-i="${i}" aria-label="${i + 1}번째 카드"></button>`
     ).join('')}</div>
     <div class="sub" style="text-align:center; margin:12px 0 0">
-      ${slides.length > 1 ? '3초마다 넘어갑니다 · 좌우로 밀거나 점을 눌러 이동'
+      ${slides.length > 1 ? '3초마다 넘어갑니다 · 누르고 있으면 멈추고, 좌우로 밀거나 점을 눌러 이동'
                           : '경기가 쌓이면 이번 달 성장 기록이 여기에 뜹니다'}
     </div>
   </div>`);
@@ -1903,7 +1906,28 @@ function renderHome(){
   const items = [...el.querySelectorAll('.hslide')];
   const dots  = [...el.querySelectorAll('.hdot')];
   const bar   = el.querySelector('.hbar');
-  let idx = 0;
+  const car   = el.querySelector('.hcar');
+
+  /* 넘김 타이머 — 남은 시간을 들고 있는 setTimeout 이다(setInterval 이 아니라).
+     손가락을 얹고 있는 동안 '남은 시간'만 얼려 두고, 떼면 그 자리에서 이어 간다.
+     진행 막대도 animation-play-state 로 같이 멈춰야 눈과 실제가 어긋나지 않는다. */
+  const DUR = 3000;
+  let idx = 0, left = DUR, startedAt = 0, held = false;
+
+  const pause = () => {
+    if (homeTimer) {
+      left = Math.max(0, left - (Date.now() - startedAt));
+      clearTimeout(homeTimer);
+      homeTimer = null;
+    }
+    bar.style.animationPlayState = 'paused';
+  };
+  const resume = () => {
+    if (items.length < 2 || homeTimer || held || document.hidden) return;
+    startedAt = Date.now();
+    homeTimer = setTimeout(() => { homeTimer = null; go(idx + 1); }, left);
+    bar.style.animationPlayState = 'running';
+  };
   const go = n => {
     idx = (n + items.length) % items.length;
     items.forEach((e, i) => e.classList.toggle('on', i === idx));
@@ -1911,20 +1935,26 @@ function renderHome(){
     // 막대는 클래스를 뗐다 붙여 애니메이션을 처음부터 다시 튼다 (사이에 reflow 강제)
     bar.classList.remove('run');
     void bar.offsetWidth;
+    bar.style.animationPlayState = '';
     if (items.length > 1) bar.classList.add('run');
-  };
-  const restart = () => {
-    if (homeTimer) clearInterval(homeTimer);
-    homeTimer = null;
-    if (items.length < 2) return;
-    // 다른 탭에 가 있는 동안은 넘기지 않는다 — 돌아왔을 때 여러 장 건너뛴 것처럼 보이지 않게
-    homeTimer = setInterval(() => { if (!document.hidden) go(idx + 1); }, 3000);
+    if (homeTimer) { clearTimeout(homeTimer); homeTimer = null; }
+    left = DUR;
+    if (held) bar.style.animationPlayState = 'paused'; else resume();
   };
 
-  dots.forEach(d => d.onclick = () => { go(+d.dataset.i); restart(); });
+  // 누르고 있는 동안 멈춤. 터치는 포인터가 대상에 암묵적으로 붙어 있어
+  // 카드 밖으로 끌고 나가도 pointerup 이 여기로 온다. 마우스는 pointerleave 로 푼다.
+  car.addEventListener('pointerdown', () => { held = true; pause(); });
+  const release = () => { if (!held) return; held = false; resume(); };
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => car.addEventListener(ev, release));
+
+  // 다른 탭·앱에 가 있는 동안도 멈춘다 — 돌아왔을 때 여러 장 건너뛴 것처럼 보이지 않게
+  homeVis = () => { if (document.hidden) pause(); else resume(); };
+  document.addEventListener('visibilitychange', homeVis);
+
+  dots.forEach(d => d.onclick = () => go(+d.dataset.i));
   el.querySelectorAll('a.hname').forEach(a => a.onclick = () => showPlayer(a.dataset.p));
 
-  const car = el.querySelector('.hcar');
   let sx = 0, sy = 0;
   car.addEventListener('touchstart', e => {
     const t = e.changedTouches[0]; sx = t.clientX; sy = t.clientY;
@@ -1932,11 +1962,10 @@ function renderHome(){
   car.addEventListener('touchend', e => {
     const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
     // 세로로 더 많이 움직였으면 스크롤이지 넘기기가 아니다
-    if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) { go(idx + (dx < 0 ? 1 : -1)); restart(); }
+    if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) go(idx + (dx < 0 ? 1 : -1));
   }, { passive: true });
 
   go(0);
-  restart();
   return el;
 }
 
@@ -2109,7 +2138,7 @@ function show(v){
   if(v==='me'){ openMeModal(); return; }   // 내 정보는 팝업 모달로 (기본 화면 유지)
   if(chartRO){ chartRO.disconnect(); chartRO = null; }
   if(gamesIO){ gamesIO.disconnect(); gamesIO = null; }
-  if(homeTimer){ clearInterval(homeTimer); homeTimer = null; }
+  stopHome();
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on', t.dataset.v===v));
   
   const auth = getAuth();
