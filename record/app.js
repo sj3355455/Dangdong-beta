@@ -1794,21 +1794,36 @@ function topOf(players, val){
   return who.length ? { v: best, who } : null;
 }
 
+/* 한 경기 최고 에버리지 — 선수별 누적 평균(avgAvg)이 아니라 '경기 하나'의 에버 최고치.
+   누적으로 뽑으면 매 경기 2.0 을 꾸준히 친 사람이, 한 번 3.0 을 뽑은 사람을 이겨 버린다.
+   기록(record)은 그날 그 경기의 최고점이어야 해서 history 를 낱개로 훑는다. */
+function bestGameAvg(players){
+  let best = null;
+  for (const p of players) for (const h of p.history) {
+    if (!(h.ballInn > 0)) continue;
+    if (!best || h.average > best.v + 1e-9) best = { v: h.average, who: [p.name], date: h.date };
+    // 소수 비교라 완전 동률은 오차 범위로 본다. 같은 사람이 두 번 찍었으면 이름은 한 번만.
+    else if (Math.abs(h.average - best.v) < 1e-9 && !best.who.includes(p.name)) best.who.push(p.name);
+  }
+  return best;
+}
+
 /* 순위 카드 묶음 (결산·최고 기록 공용) — 어느 기간을 넣든 같은 네 가지를 뽑는다.
    승수(wins)는 쓰지 않는다: 다인전 1등과 2인전 1승이 같은 1승으로 세여 값이 뒤섞인다.
    대신 모드를 가리지 않는 보정 승률(adjRate)로 '최고 승률'을 뽑는다. */
 function homeTopCards(D, badge, foot){
   const pl = D.players;
-  const enough = pl.filter(p => p.games >= 2);
+  const enough = pl.filter(p => p.games >= 2);   // 누적 평균인 승률만 표본을 요구한다
+  const bg = bestGameAvg(pl);
   return [
     [topOf(pl, p => p.games),         '최다 경기 수', '경기'],
     [topOf(enough, p => p.adjRate),   '최고 승률',    '', fPct],
-    [topOf(enough, p => p.avgAvg),    '최고 에버리지', '', f3],
+    [bg, '한 경기 최고 에버리지', '', f3, bg ? ddmy(bg.date) + ' 경기' : ''],
     [topOf(pl, p => p.bestHr),        '최고 하이런',  '점']
-  ].filter(([r]) => r).map(([r, label, unit, fmt]) => ({
+  ].filter(([r]) => r).map(([r, label, unit, fmt, ownFoot]) => ({
     badge, name: r.who.join(', '), player: r.who.length === 1 ? r.who[0] : null,
     big: (fmt ? fmt(r.v) : r.v) + (unit ? `<span class="un">${unit}</span>` : ''),
-    label, foot
+    label, foot: ownFoot || foot
   }));
 }
 
