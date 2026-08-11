@@ -6,7 +6,7 @@
 // 자세한 정책은 저장소 루트의 calendar-sql/ 참고 (1~4 를 순서대로 실행).
 import { sbFetch } from '../record/supabase.js';
 import { registerSW, getTheme, applyTheme, LS_THEME, initTeamModal,
-         ddmy, rangeRowHtml, bindRangePicker } from '../record/common.js';
+         shiftDay, openDayPicker } from '../record/common.js';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
@@ -712,14 +712,8 @@ function openDay(key){
   $('#dsPlan').style.display = canPlan ? '' : 'none';
   if (canPlan) {
     $('#dsPlanName').value = '';
-    // 기본 기간은 연 날짜 하루. 앞으로의 예정이라 지난 날짜는 못 고른다(min=오늘).
-    // 기록실 조회 기간과 같은 선택기지만 경계가 반대다 — 거긴 max=오늘.
-    const box = $('#dsPlanRange');
-    box.innerHTML = rangeRowHtml('dsp', key, key, '', { aria: '일정 기간', empty: '기간 선택' });
-    bindRangePicker(box, 'dsp', {
-      min: todayStr(), allowClear: false, openEnded: false,
-      aria: '일정 기간', empty: '기간 선택'
-    });
+    planDates = [key];        // 연 날짜부터 담아 둔다 — 하루짜리면 그대로 등록하면 된다
+    syncPlanPick();
   }
 
   const adm = $('#dsAdm');
@@ -884,31 +878,73 @@ async function saveHours(bit){
   }
 }
 
-// 일정 등록 — 이름 + 기간 한 행. 같은 날에 몇 개든 쌓을 수 있다.
-async function saveRange(){
+// ══ 일정 등록 ══
+// 날짜는 시작~끝이 아니라 하나씩 골라 담는다. 시험기간처럼 쭉 이어지는 일정도,
+// 매주 토요일처럼 떨어진 일정도 한 번에 등록되기 때문이다.
+// 저장할 때 붙어 있는 날들을 한 덩어리(구간)로 묶어 day_plans 에 한 행씩 넣는다 —
+// 서버가 행 하나를 막대 하나로 돌려주므로, 이어진 날짜는 저절로 이어진 막대가 된다.
+let planDates = [];       // 지금 고른 날들 ('YYYY-MM-DD' 오름차순)
+
+// 붙어 있는 날짜끼리 묶는다 → [{ from, to }]
+function runsOf(dates){
+  const out = [];
+  for (const d of [...dates].sort()) {
+    const last = out[out.length - 1];
+    if (last && shiftDay(last.to, 1) === d) last.to = d;
+    else out.push({ from: d, to: d });
+  }
+  return out;
+}
+
+// 고른 날짜를 한 줄로 요약. 구간이 많으면 앞의 둘만 적고 나머지는 건수로 줄인다.
+function planPickLabel(){
+  if (!planDates.length) return '📅 날짜 고르기';
+  const runs = runsOf(planDates);
+  const head = runs.slice(0, 2).map(r => shortRange(r.from, r.to)).join(', ');
+  const rest = runs.length > 2 ? ` 외 ${runs.length - 2}건` : '';
+  return `📅 ${head}${rest} · ${planDates.length}일`;
+}
+
+function syncPlanPick(){
+  const el = $('#dsPlanPick');
+  if (!el) return;
+  el.textContent = planPickLabel();
+  el.classList.toggle('has', planDates.length > 0);
+}
+
+function openPlanPicker(){
+  openDayPicker({
+    min: todayStr(),          // 앞으로의 예정이라 지난 날짜는 못 고른다
+    selected: planDates,
+    limit: RANGE_MAX,
+    onCommit: dates => { planDates = dates; syncPlanPick(); }
+  });
+}
+
+async function savePlan(){
   const key = openKey;
   const auth = getAuth();
   if (!auth || !currentTeam || isPast(key)) return;
   const name = $('#dsPlanName').value.trim();
-  // 기간은 한 칸이지만 값은 숨은 입력 둘에 담긴다 (기록실과 같은 규약)
-  let start = $('#dsPlanRange .dsp-from').value, end = $('#dsPlanRange .dsp-to').value;
-  if (!end) end = start;                       // 하루만 고르고 닫은 경우
+  const dates = planDates.filter(d => !isPast(d));   // 고른 뒤 자정을 넘겼을 수도 있다
   if (!name) return msg('일정 이름을 적어 주세요.', 'err');
-  if (!start) return msg('기간을 골라 주세요.', 'err');
-  if (end < start) { const t = start; start = end; end = t; }
-  if (daysBetween(start, end) > RANGE_MAX)
+  if (!dates.length) return msg('날짜를 골라 주세요.', 'err');
+  if (dates.length > RANGE_MAX)
     return msg(`한 번에 ${RANGE_MAX}일까지만 등록할 수 있습니다.`, 'err');
 
+  const runs = runsOf(dates);
   msg('저장 중...');
   try {
     await sbFetch('/rest/v1/day_plans', {
       method: 'POST',
-      body: JSON.stringify({ team_id: currentTeam, user_id: auth.uid, name, start_date: start, end_date: end })
+      body: JSON.stringify(runs.map(r => ({
+        team_id: currentTeam, user_id: auth.uid, name, start_date: r.from, end_date: r.to
+      })))
     });
     // 여러 날이 한꺼번에 바뀌므로 낙관적 반영 없이 서버 값을 다시 읽는다
     await refresh(true);
     openDay(key);
-    msg(`'${name}' 일정을 등록했습니다.`, 'ok');
+    msg(`'${name}' 일정을 ${dates.length}일 등록했습니다.`, 'ok');
   } catch(e){
     msg('저장하지 못했습니다: ' + errText(e), 'err');
   }
@@ -929,8 +965,6 @@ async function delPlan(id){
     msg('지우지 못했습니다: ' + errText(e), 'err');
   }
 }
-
-const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000) + 1;
 
 // 표를 바꾼 뒤 집계(시간대·사유)를 다시 읽어 시트에 반영한다
 async function reloadAgg(){
@@ -1089,7 +1123,11 @@ $('#dsClose').onclick = () => $('#daySheet').classList.remove('on');
 $('#daySheet').onclick = e => { if (e.target.id === 'daySheet') $('#daySheet').classList.remove('on'); };
 $('#dsO').onclick = () => vote('o');
 $('#dsX').onclick = () => vote('x');
-$('#dsRangeSave').onclick = saveRange;
+$('#dsPlanSave').onclick = savePlan;
+$('#dsPlanPick').onclick = openPlanPicker;
+$('#dsPlanPick').onkeydown = e => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPlanPicker(); }
+};
 $('#dsSave').onclick = saveEvent;
 $('#dsDel').onclick = delEvent;
 

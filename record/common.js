@@ -26,6 +26,9 @@ export const ymd = d => d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + p
 export const todayYmd = () => ymd(new Date());
 // 2026-07-01 → 26/07/01 (표시용 축약)
 export const ddmy = v => v ? v.slice(2).replace(/-/g, '/') : '';
+// 'YYYY-MM-DD' 를 n 일 옮긴다. Date 생성자가 달·해 넘김을 알아서 처리하므로 문자열 계산보다 안전하다.
+export const shiftDay = (s, n) =>
+  ymd(new Date(Number(s.slice(0, 4)), Number(s.slice(5, 7)) - 1, Number(s.slice(8, 10)) + n));
 
 // 기간을 한 줄로 요약. 한쪽이 비면 열린 구간으로 읽는다.
 export function rangeLabel(from, to, empty){
@@ -132,6 +135,165 @@ export function openCalendar(opt){
   const clr = q('.cal-clear');
   if (clr) clr.onclick = () => { pend = null; commit('', ''); };
   q('.cal-close').onclick = close;
+  draw();
+  document.body.appendChild(mask);
+}
+
+// ══ 날짜 골라 담기 (캘린더 일정 등록) ══
+// openCalendar 는 시작~끝 '한 구간'만 고른다. 여기는 '고른 날들의 집합'을 다뤄서
+// 떨어진 날짜(예: 매주 토요일)도 한 번에 담긴다. 붙어 있는 날을 어떻게 묶을지는
+// 부르는 쪽이 정한다 — 캘린더는 이어지는 한 덩어리를 막대 하나로 저장한다.
+//
+// 연속된 날을 담는 게 가장 흔한 쓰임이라, 톡 누르기 말고 가로로 쓸어도 칠해진다.
+// (달력 본문의 붓 모드와 같은 손놀림 — 처음 누른 칸의 반대 상태로 지나간 칸을 맞춘다)
+//
+// opt: { min, max, selected:[], limit, onCommit(dates[]) }
+export function openDayPicker(opt){
+  const o = opt || {};
+  const lo = o.min || '', hi = o.max || '';        // '' = 제한 없음
+  const today = todayYmd();
+  const inBounds = s => (!lo || s >= lo) && (!hi || s <= hi);
+  const limit = o.limit || 0;
+  const picked = new Set((o.selected || []).filter(inBounds));
+  let warn = '';                                   // 한도에 걸렸을 때만 안내문 자리를 뺏는다
+  const seed = [...picked].sort()[0] || (inBounds(today) ? today : (lo || hi));
+  let cur = new Date(Number(seed.slice(0, 4)), Number(seed.slice(5, 7)) - 1, 1);
+
+  const mask = document.createElement('div');
+  mask.className = 'calmask';
+  mask.innerHTML = `<div class="calcard">
+      <div class="calhd">
+        <button class="calnav cal-prev" aria-label="이전 달">‹</button>
+        <button class="caltitle cal-title"></button>
+        <button class="calnav cal-next" aria-label="다음 달">›</button>
+      </div>
+      <div class="calhint cal-hint"></div>
+      <div class="calgrid cal-dow">${DOW_KO.map((d,i)=>`<div class="caldow"${i===0?' style="color:#e5484d"':''}>${d}</div>`).join('')}</div>
+      <div class="calgrid cal-days" style="touch-action:none"></div>
+      <div class="calft"><button class="cal-clear">모두 지우기</button><button class="cal-done primary">확인</button></div>
+    </div>`;
+  const q = s => mask.querySelector(s);
+  const onKey = e => { if (e.key === 'Escape') close(); };
+
+  // 어떻게 닫든 지금 골라 둔 그대로 넘긴다 — 이건 확정 단계가 아니라 선택을 고치는 창이다.
+  let closed = false;
+  function close(){
+    if (closed) return;
+    closed = true;
+    mask.remove();
+    document.removeEventListener('keydown', onKey);
+    o.onCommit([...picked].sort());
+  }
+  mask.onclick = e => { if (e.target === mask) close(); };
+  document.addEventListener('keydown', onKey);
+
+  // want=true 담기 / false 빼기 / null 뒤집기
+  function toggle(s, want){
+    if (!inBounds(s)) return;
+    if (want === false || (want == null && picked.has(s))) { picked.delete(s); warn = ''; return; }
+    if (picked.has(s)) return;
+    if (limit && picked.size >= limit) { warn = `${limit}일까지만 고를 수 있습니다.`; return; }
+    picked.add(s);
+    warn = '';
+  }
+
+  function draw(){
+    const y = cur.getFullYear(), m = cur.getMonth();
+    const first = new Date(y, m, 1), lastD = new Date(y, m + 1, 0).getDate();
+    q('.cal-title').textContent = y + '년 ' + (m + 1) + '월';
+    q('.cal-next').disabled = !!hi && ymd(new Date(y, m + 1, 1)) > hi;
+    q('.cal-prev').disabled = !!lo && ymd(new Date(y, m, 0)) < lo;
+    q('.cal-hint').innerHTML = warn ? `<b>${warn}</b>`
+      : picked.size ? `<b>${picked.size}일</b> 선택됨 · 이어지는 날은 하나의 막대가 됩니다`
+      : '날짜를 누르거나 가로로 쓸어 고르세요 · 위 <b>연·월</b>은 그 달 전체';
+
+    let cells = '';
+    for (let i = 0; i < first.getDay(); i++) cells += '<div></div>';
+    for (let d = 1; d <= lastD; d++){
+      const s = ymd(new Date(y, m, d));
+      const dis = !inBounds(s);
+      const sel = picked.has(s);
+      const col = (first.getDay() + d - 1) % 7;
+      // 붙어 있는 선택끼리는 맞닿은 모서리를 펴서 한 덩어리로 보이게 한다.
+      // 주가 바뀌는 자리(토→일)는 화면에서 떨어져 있으니 이어 붙이지 않는다.
+      const jl = sel && col > 0 && picked.has(shiftDay(s, -1));
+      const jr = sel && col < 6 && picked.has(shiftDay(s, 1));
+      const cl = 'calday' + (sel ? ' sel' : '') + (jl ? ' jl' : '') + (jr ? ' jr' : '')
+               + (s === today ? ' today' : '');
+      const st = (!sel && !dis && col === 0) ? ' style="color:#e5484d"' : '';
+      cells += `<button class="${cl}" data-d="${s}"${dis?' disabled':''}${st}>${d}</button>`;
+    }
+    q('.cal-days').innerHTML = cells;
+  }
+
+  // 칠하기 — 격자 자체에 걸어 두면 draw() 가 칸을 갈아 끼워도 손을 놓치지 않는다
+  const days = q('.cal-days');
+  let mode = null, seen = null;                    // seen: 이번 제스처에서 이미 지나간 날
+  const dayAt = (x, y) => {
+    const el = document.elementFromPoint(x, y);
+    const b = el && el.closest ? el.closest('.calday') : null;
+    return b && !b.disabled ? b : null;
+  };
+  const apply = btn => {
+    if (!btn || !seen) return;
+    const s = btn.dataset.d;
+    if (!s || seen.has(s)) return;                 // 손이 왔다 갔다 해도 결과가 같도록
+    seen.add(s);
+    toggle(s, mode);
+    draw();
+  };
+  days.addEventListener('pointerdown', e => {
+    if (!e.isPrimary) return;
+    const btn = dayAt(e.clientX, e.clientY);
+    if (!btn) return;
+    e.preventDefault();                            // 쓸 때 뒤 화면이 따라 밀리지 않게 (touch-action:none 과 한 쌍)
+    mode = !picked.has(btn.dataset.d);             // 처음 누른 칸의 반대 상태로 통일한다
+    seen = new Set();
+    try { days.setPointerCapture(e.pointerId); } catch(err){}
+    apply(btn);
+  });
+  days.addEventListener('pointermove', e => {
+    if (!seen || !e.isPrimary) return;
+    apply(dayAt(e.clientX, e.clientY));
+  });
+  const endPaint = e => {
+    if (!seen) return;
+    try { days.releasePointerCapture(e.pointerId); } catch(err){}
+    mode = null; seen = null;
+  };
+  days.addEventListener('pointerup', endPaint);
+  days.addEventListener('pointercancel', endPaint);
+  // 포인터를 가로챘으므로 click 은 오지 않는다 → 키보드는 여기서 따로 받는다
+  days.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const btn = e.target.closest && e.target.closest('.calday');
+    if (!btn || btn.disabled) return;
+    e.preventDefault();
+    const s = btn.dataset.d;
+    toggle(s, null);
+    draw();
+    const back = days.querySelector(`.calday[data-d="${s}"]`);   // draw() 가 칸을 새로 만들었다
+    if (back) back.focus();
+  });
+
+  q('.cal-prev').onclick = () => { cur.setMonth(cur.getMonth() - 1); draw(); };
+  q('.cal-next').onclick = () => { cur.setMonth(cur.getMonth() + 1); draw(); };
+  // 연·월 누르기 = 이 달 통째로. 이미 다 골라 뒀으면 반대로 이 달만 뺀다.
+  q('.cal-title').onclick = () => {
+    const y = cur.getFullYear(), m = cur.getMonth(), lastD = new Date(y, m + 1, 0).getDate();
+    const all = [];
+    for (let d = 1; d <= lastD; d++){
+      const s = ymd(new Date(y, m, d));
+      if (inBounds(s)) all.push(s);
+    }
+    if (!all.length) return;
+    const every = all.every(s => picked.has(s));
+    for (const s of all) toggle(s, !every);
+    draw();
+  };
+  q('.cal-clear').onclick = () => { picked.clear(); warn = ''; draw(); };
+  q('.cal-done').onclick = close;
+
   draw();
   document.body.appendChild(mask);
 }

@@ -242,10 +242,23 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
 .calday.today{box-shadow:inset 0 0 0 1px var(--accent)}
 .calday.inr{background:var(--hover)}
 .calday.sel{background:var(--accent);color:#fff;font-weight:700}
+/* 날짜 골라 담기(openDayPicker) — 붙어 있는 선택은 한 덩어리로 보이게 모서리를 펴고
+   칸 사이 2px 틈을 그림자로 메운다. 달력에 그려질 막대와 같은 모양으로 미리 보이는 셈이다. */
+.calday.sel.jl{border-top-left-radius:0;border-bottom-left-radius:0;box-shadow:-3px 0 0 var(--accent)}
+.calday.sel.jr{border-top-right-radius:0;border-bottom-right-radius:0;box-shadow:3px 0 0 var(--accent)}
+.calday.sel.jl.jr{box-shadow:-3px 0 0 var(--accent),3px 0 0 var(--accent)}
 .calft{display:flex;gap:6px;margin-top:10px}
 .calft button{flex:1;padding:9px 0;border-radius:9px;border:1px solid var(--line);
   background:var(--card);color:var(--muted);font-size:.85rem;cursor:pointer}
 .calft button:hover{color:var(--accent);border-color:var(--accent)}
+.calft button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
+.calft button.primary:hover{color:#fff}
+/* 고른 날짜 요약 칸 — 누르면 위 달력이 열린다 (기간 칸을 대신한다) */
+.pickbox{margin-top:8px;min-height:34px;display:flex;align-items:center;justify-content:center;
+  padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);
+  color:var(--muted);font-size:.9rem;line-height:1.35;text-align:center;cursor:pointer}
+.pickbox.has{color:var(--text)}
+.pickbox:hover{border-color:var(--accent)}
 /* ══ 설정 모달 (점수판·기록실과 동일) ══ */
 .setmask{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:1100;padding:20px}
 .setmask.on{display:flex}
@@ -320,13 +333,14 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
     </div>
 
     <!-- 내 일정 — O/X 와 별개로 언제든 등록한다. 같은 날에 몇 개든 쌓을 수 있다.
+         날짜는 시작~끝이 아니라 하나씩 골라 담는다 (떨어진 날도 한 번에).
          등록한 일정은 아래 '등록된 일정' 목록에 나오고 거기서 지운다. -->
     <div class="vbox" id="dsPlan" style="display:none;">
       <div class="vlab">📌 일정 등록</div>
       <input id="dsPlanName" class="inp" maxlength="20" placeholder="일정 이름 (예: 시험기간)">
-      <div id="dsPlanRange" style="margin-top:8px;"></div>
-      <button id="dsRangeSave" class="sbtn" style="width:100%; margin-top:8px;">＋ 일정 등록</button>
-      <div class="sub" style="margin-top:8px; font-size:.75rem;">달력에 표시만 됩니다. 못 오는 날은 ❌ 를 따로 눌러 주세요.</div>
+      <div id="dsPlanPick" class="pickbox" role="button" tabindex="0" aria-label="일정 날짜 고르기">📅 날짜 고르기</div>
+      <button id="dsPlanSave" class="sbtn" style="width:100%; margin-top:8px;">＋ 일정 등록</button>
+      <div class="sub" style="margin-top:8px; font-size:.75rem;">달력에 표시만 됩니다. 이어지는 날짜는 하나의 막대로 이어집니다. 못 오는 날은 ❌ 를 따로 눌러 주세요.</div>
     </div>
 
     <!-- 모두에게 보이는 집계 — 이름 없이 인원수만 -->
