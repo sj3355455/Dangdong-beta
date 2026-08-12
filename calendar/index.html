@@ -131,8 +131,10 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
 .evchip{font-size:.64rem;font-weight:800;color:#fff;background:var(--accent);
   border-radius:5px;padding:1px 4px;line-height:1.3;white-space:nowrap;
   max-width:100%;overflow:hidden;text-overflow:ellipsis}
-/* 칸이 이미 주황이니 칩까지 채우면 답답하다 — 글자만 남긴다 */
-.cell.event .evchip{background:none;color:var(--accent);padding:0}
+/* 칸이 이미 주황이니 칩까지 채우면 답답하다 — 글자만 남긴다.
+   '제120회' 처럼 세 자리 회차도 한 줄에 들어가야 해서 자간을 조금 좁힌다. */
+.cell.event .evchip{background:none;color:var(--accent);padding:0;letter-spacing:-.03em}
+.cell.event .evchip.sm{font-size:.55rem;letter-spacing:-.06em}
 .gchip{font-size:.66rem;color:var(--muted);line-height:1.2;white-space:nowrap}
 /* 가능/불가 인원 — 좁은 칸에 두 줄로 넘치지 않게 "5 / 2" 한 줄로 */
 .r3 b{font-size:.74rem;font-weight:800;font-variant-numeric:tabular-nums}

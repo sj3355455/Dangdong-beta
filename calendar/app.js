@@ -201,8 +201,13 @@ function cellR3Html(key){
   const showVotes = !past && !ev && (c.o || c.x);
   // 판수는 날짜가 지난 뒤에만. 오늘 친 판수를 바로 띄우면 아직 유효한 O/X 와 자리를 다툰다.
   const showGames = past && g;
-  return showGames ? `<span class="gchip">🎱 ${g}판</span>`
-    : ev ? `<span class="evchip">${ev.round_no ? esc(ev.round_no) + '회' : '정기전'}</span>`
+  // 정기전이 가장 먼저다 — 칸 색만으로는 '몇 회'인지 알 수 없고, 그게 이 칸에서 제일 궁금한 값이다.
+  // (판수에 자리를 내주던 예전 순서에서는 경기가 기록된 지난 정기전이 색칠만 남았다.
+  //  그 날 친 판수는 칸을 열면 그대로 보인다)
+  // 회차가 세 자리면 좁은 폰(320px)에서 '제12…' 로 잘려 엉뚱한 회차로 읽힌다 → 그때만 한 호 줄인다
+  const sm = ev && String(ev.round_no || '').length >= 3 ? ' sm' : '';
+  return ev ? `<span class="evchip${sm}">${ev.round_no ? '제' + esc(ev.round_no) + '회' : '정기전'}</span>`
+    : showGames ? `<span class="gchip">🎱 ${g}판</span>`
     : showVotes ? `<b class="vo">${c.o}</b><i class="vsep">/</i><b class="vx">${c.x}</b>`
     : '';
 }
@@ -691,7 +696,7 @@ function openDay(key){
   $('#dsTitle').textContent = label(key);
 
   const bits = [];
-  if (ev) bits.push(ev.round_no ? `🏅 ${ev.round_no}회 정기전` : '🏅 정기전');
+  if (ev) bits.push(ev.round_no ? `🏅 제${ev.round_no}회 정기전` : '🏅 정기전');
   if (ev && ev.note) bits.push(esc(ev.note));
   if (g) bits.push(`🎱 ${g}판`);
   $('#dsInfo').innerHTML = bits.join(' · ') || '기록된 일정이 없습니다.';

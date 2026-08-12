@@ -1810,7 +1810,6 @@ function bestGameOf(players, val){
   return best;
 }
 const gameAvg  = h => h.ballInn > 0 ? h.score / h.ballInn : null;
-const gameHit  = h => h.ballInn > 0 ? (h.ballInn - h.miss) / h.ballInn * 100 : null;
 // 기록이 한 사람·한 경기일 때만 날짜를 밝힌다 (공동이면 날짜가 여럿이라 한 날을 못 적는다)
 const recDate = r => (r && r.who.length === 1) ? ddmy(r.date) + ' 경기' : '';
 
@@ -1911,7 +1910,7 @@ function homeLastCards(){
 }
 
 /* ── 최고 기록 ── 기간·정기전 필터와 무관한 통산 전체.
-   에버리지·득점률은 '한 경기' 최고치다 — 결산은 그 달의 성적 요약이지만
+   에버리지는 '한 경기' 최고치다 — 결산은 그 달의 성적 요약이지만
    이쪽은 깨지기 전까지 남는 기록판이라 그날 하루의 최고점을 올린다.
    (하이런은 원래 경기별 최고 연속 득점이라 누적/한 경기 구분이 없다) */
 function homeBestCards(){
@@ -1919,10 +1918,8 @@ function homeBestCards(){
   if (!D.games.length) return [];
   const pl = D.players;
   const bAvg = bestGameOf(pl, gameAvg);
-  const bHit = bestGameOf(pl, gameHit);
   return mkCards([
-    [bAvg, '한 경기 최고 에버리지', '', f3,   recDate(bAvg)],
-    [bHit, '한 경기 최고 득점률',   '', fPct, recDate(bHit)],
+    [bAvg, '한 경기 최고 에버리지', '', f3, recDate(bAvg)],
     [topOf(pl, p => p.bestHr), '최고 하이런', '점']
   ], '👑 통산 최고 기록', '지금까지 쌓인 ' + D.games.length + '경기 전체 기준');
 }
