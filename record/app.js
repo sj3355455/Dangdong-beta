@@ -1554,7 +1554,11 @@ function renderMe() {
   };
   
   d.querySelector('#meLogout').onclick = () => {
+    // 소속 팀도 함께 지운다 — 이게 남으면 로그아웃 상태로도 그 팀 id 로 조회를 시도하는데,
+    // games 가 팀 단위로 잠긴 뒤로는 그 요청이 빈 결과가 아니라 권한 오류로 떨어진다.
+    // (다른 로그아웃 경로 두 곳은 원래 둘 다 지우고 있었다)
     localStorage.removeItem(LS_AUTH);
+    localStorage.removeItem(LS_TEAM);
     location.href = '../score/';
   };
   return d;
