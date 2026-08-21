@@ -120,6 +120,51 @@ create policy "read team handicap_history" on public.handicap_history
 
 revoke select on public.handicap_history from anon;
 
+-- ─────────────────────────────────────────────────────────────
+-- 5) 남아 있는 '전체 공개' 정책 쓸어내기
+--
+-- 위에서는 이 레포의 SQL 파일에 적힌 이름만 지웠다. 그런데 정책은 대시보드에서도
+-- 만들 수 있고 Supabase 기본 템플릿은 "Enable read access for all users" 같은
+-- 다른 이름을 쓴다. 정책은 OR 로 합쳐지므로 using (true) 가 하나라도 남으면
+-- 위에서 건 팀 조건이 통째로 무의미해진다 → 이름이 아니라 '내용'으로 찾아 지운다.
+--
+-- 지우는 대상은 SELECT 정책으로 한정한다. 바로 위에서 대체 정책을 이미 만들어 뒀으므로
+-- 표가 읽기 불가 상태로 남는 일은 없다. 반면 ALL(쓰기까지 포함) 정책은 함부로 지우면
+-- 저장이 막힐 수 있어, 지우지 않고 이름만 알려 주고 멈춘다.
+-- ─────────────────────────────────────────────────────────────
+do $$
+declare
+  r record;
+  keep text[] := array['read team games','read team profiles','read team handicap_history'];
+  blanket text := '';
+begin
+  for r in
+    select tablename, policyname, cmd
+      from pg_policies
+     where schemaname = 'public'
+       and tablename in ('games','profiles','handicap_history')
+       and permissive = 'PERMISSIVE'
+       and not (policyname = any(keep))
+       -- 읽기를 여는 정책만 본다. INSERT 정책은 조건이 qual 이 아니라 with_check 에 있어
+       -- qual 이 NULL 인데, 그걸 '조건 없음'으로 오해하면 멀쩡한 쓰기 정책까지 걸린다.
+       and cmd in ('SELECT','ALL')
+       and qual is not null
+       -- 공백·괄호를 지워 'true' / '( true )' 같은 표기 차이를 흡수한다
+       and regexp_replace(qual, '[\s()]', '', 'g') = 'true'
+  loop
+    if r.cmd = 'SELECT' then
+      raise notice '전체 공개 읽기 정책을 지웁니다 — %.% : "%"', 'public', r.tablename, r.policyname;
+      execute format('drop policy %I on public.%I', r.policyname, r.tablename);
+    elsif r.cmd = 'ALL' then
+      blanket := blanket || format(E'\n  · %s : "%s"  (cmd=ALL)', r.tablename, r.policyname);
+    end if;
+  end loop;
+
+  if blanket <> '' then
+    raise exception E'읽기·쓰기를 한꺼번에 전체 허용하는 정책이 남아 있습니다:%\n지우면 저장이 막힐 수 있어 자동으로 건드리지 않았습니다. 확인 후 직접 지우거나 조건을 붙이고 다시 실행해 주세요.', blanket;
+  end if;
+end $$;
+
 -- PostgREST 스키마 캐시 갱신 — 새 함수(shares_team_with)를 곧바로 알아보게 한다.
 notify pgrst, 'reload schema';
 
@@ -132,29 +177,37 @@ notify pgrst, 'reload schema';
 do $$
 declare bad text := '';
 begin
-  -- anon 에게 select 권한이 남아 있으면 안 된다
-  if exists (select 1 from information_schema.role_table_grants
-             where grantee = 'anon' and privilege_type = 'SELECT'
-               and table_schema = 'public'
-               and table_name in ('games','profiles','handicap_history'))
-    then bad := bad || ' anon에게_select권한_남음'; end if;
+  -- anon 에게 select 권한이 남아 있으면 안 된다 (어느 표인지까지 알려 준다)
+  bad := bad || coalesce((
+    select string_agg(format(E'\n  · anon 에게 %s 읽기 권한이 남아 있음', table_name), '')
+      from information_schema.role_table_grants
+     where grantee = 'anon' and privilege_type = 'SELECT'
+       and table_schema = 'public'
+       and table_name in ('games','profiles','handicap_history')), '');
 
-  -- using (true) 인 정책이 남아 있으면 안 된다
-  if exists (select 1 from pg_policies
-             where schemaname = 'public'
-               and tablename in ('games','profiles','handicap_history')
-               and cmd = 'SELECT' and qual = 'true')
-    then bad := bad || ' using(true)_정책_남음'; end if;
+  -- 조건 없이 읽기를 여는 정책이 남아 있으면 안 된다
+  -- (INSERT 정책은 조건이 with_check 에 있어 qual 이 NULL 이다 → 읽기 정책만 본다)
+  bad := bad || coalesce((
+    select string_agg(format(E'\n  · %s 에 전체 공개 읽기 정책 "%s" (cmd=%s) 남아 있음',
+                             tablename, policyname, cmd), '')
+      from pg_policies
+     where schemaname = 'public'
+       and tablename in ('games','profiles','handicap_history')
+       and permissive = 'PERMISSIVE'
+       and cmd in ('SELECT','ALL')
+       and qual is not null
+       and regexp_replace(qual, '[\s()]', '', 'g') = 'true'), '');
 
   -- 세 표 모두 RLS 가 켜져 있어야 한다
-  if exists (select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace
-             where n.nspname = 'public'
-               and c.relname in ('games','profiles','handicap_history')
-               and not c.relrowsecurity)
-    then bad := bad || ' RLS_꺼진_표_있음'; end if;
+  bad := bad || coalesce((
+    select string_agg(format(E'\n  · %s 의 RLS 가 꺼져 있음', c.relname), '')
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and c.relname in ('games','profiles','handicap_history')
+       and not c.relrowsecurity), '');
 
   if bad <> '' then
-    raise exception '격리가 덜 됐습니다:% — 이 파일을 다시 실행해 주세요.', bad;
+    raise exception E'격리가 덜 됐습니다:%\n위 항목을 정리한 뒤 이 파일을 다시 실행해 주세요.', bad;
   end if;
   raise notice '팀 격리 완료 — games / profiles / handicap_history 모두 팀 단위로 잠갔습니다.';
 end $$;
