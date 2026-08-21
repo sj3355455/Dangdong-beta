@@ -114,27 +114,27 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
 .cell.event{background:var(--accent-bg);border-color:var(--accent-soft)}
 /* 오늘은 칸을 회색으로 채운다. 테두리는 '내 표' 색이 쓰므로 배경으로 구분한다.
    .event 뒤에 둬서 오늘이 정기전이어도 오늘 쪽이 이긴다 — 하루뿐인 표시가 더 급하다.
-   (그날이 정기전인 건 아랫줄 칩이 그대로 알려 준다) */
+   (그날이 정기전인 건 가운뎃줄 회차가 그대로 알려 준다) */
 .cell.today{background:var(--line)}
 /* 내가 투표한 날 — 예전엔 오른쪽 위에 O/X 동그라미를 얹었는데, 테두리 색 하나로 충분하다.
    덕분에 칸 안이 비어 날짜를 가운데로 놓을 수 있다. */
 .cell.vo{border-color:var(--ok);border-width:2px;padding:2px}
 .cell.vx{border-color:var(--no);border-width:2px;padding:2px}
-/* 칸 안 세 줄 — 1) 날짜 2) 일정 막대 자리 3) 정기전 칩 · 인원수 · 판수.
-   높이를 박아 둬야 칸마다 세로가 흔들리지 않는다. 막대는 .wbars 가 2번 자리 위에 얹는다.
-   정기전 칩은 날짜와 같은 줄에 두면 날짜가 가운데로 못 가서 아랫줄로 내렸다. */
+/* 칸 안 세 줄 — 1) 날짜 2) 정기전 회차 · 일정 막대 3) 인원수(오늘·앞으로) 또는 판수(지난 날).
+   높이를 박아 둬야 칸마다 세로가 흔들리지 않는다. 막대는 .wbars 가 2번 자리 위에 얹는데,
+   막대는 정기전 칸을 비켜 가므로 회차와 한 칸에서 겹치지 않는다.
+   정기전 회차는 날짜와 같은 줄에 두면 날짜가 가운데로 못 가서 아랫줄로 내렸다. */
 .r1{display:flex;align-items:center;justify-content:center;gap:3px;height:17px;overflow:hidden}
-.rbar{flex:0 0 auto;margin-top:5px}        /* 둘째 줄 — 막대가 앉을 자리. 위 5px 은 날짜와의 간격 */
+/* 둘째 줄 — 회차가 들어가면 그걸 가운데 놓고, 없으면 막대 자리만 차지한다. 위 5px 은 날짜와의 간격 */
+.rbar{flex:0 0 auto;margin-top:5px;display:flex;align-items:center;justify-content:center;overflow:hidden}
 .r3{display:flex;align-items:center;justify-content:center;gap:2px;height:17px;margin-top:auto;overflow:hidden;white-space:nowrap}
 .dnum{font-size:.85rem;font-weight:700;line-height:1.1}
 .dnum.sun{color:var(--no)} .dnum.sat{color:#3b82f6}
-.evchip{font-size:.64rem;font-weight:800;color:#fff;background:var(--accent);
-  border-radius:5px;padding:1px 4px;line-height:1.3;white-space:nowrap;
-  max-width:100%;overflow:hidden;text-overflow:ellipsis}
-/* 칸이 이미 주황이니 칩까지 채우면 답답하다 — 글자만 남긴다.
-   '제120회' 처럼 세 자리 회차도 한 줄에 들어가야 해서 자간을 조금 좁힌다. */
-.cell.event .evchip{background:none;color:var(--accent);padding:0;letter-spacing:-.03em}
-.cell.event .evchip.sm{font-size:.55rem;letter-spacing:-.06em}
+/* 정기전 회차 — 칸이 이미 주황이라 칩까지 채우면 답답하다. 글자만 남긴다.
+   '제120회' 처럼 세 자리 회차도 한 줄에 들어가야 해서 자간을 좁히고, 그래도 모자라면 .sm 이 받는다. */
+.evchip{font-size:.64rem;font-weight:800;color:var(--accent);line-height:1.3;
+  letter-spacing:-.03em;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.evchip.sm{font-size:.55rem;letter-spacing:-.06em}
 .gchip{font-size:.66rem;color:var(--muted);line-height:1.2;white-space:nowrap}
 /* 가능/불가 인원 — 좁은 칸에 두 줄로 넘치지 않게 "5 / 2" 한 줄로 */
 .r3 b{font-size:.74rem;font-weight:800;font-variant-numeric:tabular-nums}

@@ -193,23 +193,24 @@ function describeCountErr(e){
 }
 
 // ══ 화면 ══
-// 칸 셋째 줄 — 정기전 칩 · 인원수 · 판수. 붓 모드가 칸 하나만 다시 그릴 때도 이걸 쓴다.
-function cellR3Html(key){
-  const ev = events[key], g = gameCnt[key], c = counts[key] || { o: 0, x: 0 };
-  const past = isPast(key);
-  // 지난 날의 참여 투표는 이미 의미가 없다 → 인원수를 지우고 그날 실제로 있었던 일만 남긴다.
-  const showVotes = !past && !ev && (c.o || c.x);
-  // 판수는 날짜가 지난 뒤에만. 오늘 친 판수를 바로 띄우면 아직 유효한 O/X 와 자리를 다툰다.
-  const showGames = past && g;
-  // 정기전이 가장 먼저다 — 칸 색만으로는 '몇 회'인지 알 수 없고, 그게 이 칸에서 제일 궁금한 값이다.
-  // (판수에 자리를 내주던 예전 순서에서는 경기가 기록된 지난 정기전이 색칠만 남았다.
-  //  그 날 친 판수는 칸을 열면 그대로 보인다)
+// 칸 둘째 줄 — 정기전 회차. 일정 막대가 앉는 자리와 같지만, 막대는 정기전 칸을 비켜 가므로
+// (barsForWeek 의 skip) 둘이 한 칸에서 겹치는 일은 없다.
+function cellR2Html(key){
+  const ev = events[key];
+  if (!ev) return '';
   // 회차가 세 자리면 좁은 폰(320px)에서 '제12…' 로 잘려 엉뚱한 회차로 읽힌다 → 그때만 한 호 줄인다
-  const sm = ev && String(ev.round_no || '').length >= 3 ? ' sm' : '';
-  return ev ? `<span class="evchip${sm}">${ev.round_no ? '제' + esc(ev.round_no) + '회' : '정기전'}</span>`
-    : showGames ? `<span class="gchip">🎱 ${g}판</span>`
-    : showVotes ? `<b class="vo">${c.o}</b><i class="vsep">/</i><b class="vx">${c.x}</b>`
-    : '';
+  const sm = String(ev.round_no || '').length >= 3 ? ' sm' : '';
+  return `<span class="evchip${sm}">${ev.round_no ? '제' + esc(ev.round_no) + '회' : '정기전'}</span>`;
+}
+
+// 칸 셋째 줄 — 지난 날은 '몇 판 쳤나', 오늘·앞으로는 '몇 명 되나'. 그 시점에 쓸모 있는 쪽만 남긴다.
+// 정기전이든 아니든 같은 규칙이다 — 회차는 둘째 줄이 맡으므로 여기서 자리를 다투지 않는다.
+// 붓 모드가 칸 하나만 다시 그릴 때도 이걸 쓴다.
+function cellR3Html(key){
+  const g = gameCnt[key], c = counts[key] || { o: 0, x: 0 };
+  // 오늘 친 판수를 바로 띄우면 아직 유효한 O/X 와 자리를 다툰다 → 판수는 날짜가 지난 뒤부터.
+  if (isPast(key)) return g ? `<span class="gchip">🎱 ${g}판</span>` : '';
+  return (c.o || c.x) ? `<b class="vo">${c.o}</b><i class="vsep">/</i><b class="vx">${c.x}</b>` : '';
 }
 
 function render(){
@@ -255,7 +256,10 @@ function render(){
   }
   const monthLanes = laid.reduce((n, wk) =>
     Math.max(n, wk.bars.reduce((m, b) => Math.max(m, b.lane + 1), 0)), 0);
-  const barBox = monthLanes * (BAR_H + 2);             // 막대가 놓일 셋째 줄의 높이 (달 전체 공통)
+  // 둘째 줄 높이 (달 전체 공통) — 막대 줄 수로 정하되, 이 달에 정기전이 있으면
+  // 회차가 앉을 한 줄은 반드시 남긴다. 일정이 하나도 없는 달이라도 회차는 떠야 하기 때문이다.
+  const hasEvent = slots.some(k => k && events[k]);
+  const barBox = Math.max(monthLanes * (BAR_H + 2), hasEvent ? EV_H : 0);
 
   let weeks = '';
   for (const { row, bars } of laid) {
@@ -266,7 +270,7 @@ function render(){
       const dow = new Date(y, m, d).getDay();
       const ev = events[key], mv = myChoice(key);
       // 지난 날의 참여 투표는 이미 의미가 없다 → 내 표·표시 테두리를 지우고
-      // 그날 실제로 있었던 일(정기전·판수)만 남긴다. 셋째 줄은 cellR3Html 이 같은 기준으로 판단한다.
+      // 그날 실제로 있었던 일(정기전·판수)만 남긴다. 셋째 줄도 cellR3Html 이 같은 기준으로 가른다.
       const past = key < today;
       const cls = ['cell'];
       if (ev) cls.push('event');
@@ -275,14 +279,13 @@ function render(){
       if (mv && !past) cls.push(mv === 'o' ? 'vo' : 'vx');
       if (past) cls.push('past');          // 투표 불가 — 눌러서 정기전·판수는 볼 수 있다
       const dcls = dow === 0 ? ' sun' : dow === 6 ? ' sat' : '';
-      // 첫째 줄 = 날짜만(가운데), 둘째 줄 = 일정 막대, 셋째 줄 = 정기전 칩 · 인원수 · 판수.
-      // 정기전 칩을 날짜 옆에 두면 날짜가 가운데를 못 잡아 아랫줄로 내렸다. 셋째 줄은
-      // 원래 정기전 날엔 인원수를 안 띄우던 자리라 서로 부딪히지 않는다.
-      // .rbar 는 막대가 앉을 자리만 차지하는 빈 칸이다 — 실제 막대는 .wbars 가 그 위에 얹는다.
-      // 줄 높이를 고정해 둬야 칸마다 위아래로 흔들리지 않는다.
+      // 첫째 줄 = 날짜만(가운데), 둘째 줄 = 정기전 회차 · 일정 막대, 셋째 줄 = 인원수 또는 판수.
+      // 정기전 회차를 날짜 옆에 두면 날짜가 가운데를 못 잡아 아랫줄로 내렸다.
+      // .rbar 에는 막대가 얹히지만(.wbars 가 그 위에 그린다) 막대는 정기전 칸을 비켜 가므로
+      // 회차와 겹치지 않는다. 줄 높이를 고정해 둬야 칸마다 위아래로 흔들리지 않는다.
       cells += `<div class="${cls.join(' ')}" data-d="${key}">
         <span class="r1"><span class="dnum${dcls}">${d}</span></span>
-        <span class="rbar" style="height:${barBox}px"></span>
+        <span class="rbar" style="height:${barBox}px">${cellR2Html(key)}</span>
         <span class="r3">${cellR3Html(key)}</span>
       </div>`;
     }
@@ -587,6 +590,7 @@ function topDaysHtml(){
 // 서버는 날짜별로 [사유, 인원] 만 준다. 같은 사유가 연달아 붙어 있는 구간을 여기서 이어 붙여
 // 하나의 일정으로 본다. 이름만 쓰므로 누가 등록했는지는 여전히 드러나지 않는다.
 const BAR_H = 13;                                   // 막대 한 줄 높이(px)
+const EV_H = BAR_H + 2;                             // 정기전 회차가 앉을 최소 높이 — 막대 한 줄과 같게 둔다
 // 칸 간격은 CSS 의 --gap 하나만 보고 계산한다 — 여기에 숫자를 박아 두면 CSS 를 고칠 때 막대가 어긋난다.
 // INSET: 칸 폭에 딱 맞추면 둥근 모서리 밖으로 삐져나와 보이므로 양쪽을 조금 들여 그린다.
 // 막대는 칸 세로 한가운데(top:26px)에 놓여 둥근 모서리와 멀다. 그래서 조금만 들여도 되고,
