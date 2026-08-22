@@ -279,6 +279,23 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
 .setseg{display:flex;gap:4px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:3px}
 .setseg button{flex:1;padding:8px 4px;border:none;background:none;color:var(--muted);font-size:.85rem;font-weight:600;border-radius:7px;cursor:pointer}
 .setseg button.on{background:var(--accent);color:#fff}
+
+/* ══ 정기전 자동 편성 (팀장) ══ */
+.reglab{font-size:.82rem;color:var(--muted);font-weight:700;margin:16px 0 6px}
+.reglab .cnt{font-weight:600;color:var(--muted);opacity:.8}
+.reglab .cnt.bad{color:var(--no);opacity:1}
+/* 요일 칩 — 일곱 개가 좁은 폰에서도 한 줄에 들어가야 해서 글자 하나씩만 놓는다 */
+.dowpick{display:flex;gap:4px}
+.dowpick button{flex:1 1 0;min-width:0;padding:11px 0;border:1.5px solid var(--line);border-radius:10px;
+  background:var(--card);color:var(--muted);font-size:.9rem;font-weight:700;font-family:inherit;cursor:pointer}
+.dowpick button.sun{color:var(--no)} .dowpick button.sat{color:#3b82f6}
+.dowpick button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.dowpick button:active{transform:scale(.97)}
+/* 미리보기 — 몇 회가 언제부터 언제까지 잡히는지 등록 전에 보여 준다 */
+.regprev{margin-top:16px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--bg);
+  font-size:.88rem;line-height:1.6;text-align:center;color:var(--muted)}
+.regprev b{color:var(--accent);font-weight:800}
+.regprev .rd{color:var(--text);font-weight:700}
 </style>
 </head>
 <body>
@@ -381,6 +398,53 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
 </div>
 
 
+
+<!-- ══ 정기전 설정 (팀장) ══
+     날짜마다 회차를 손으로 적는 대신, 주 몇 회·무슨 요일인지만 정하면 회차가 자동으로 매겨진다. -->
+<div id="regModal" class="setmask">
+  <div class="setcard">
+    <div class="sethd"><b>🏅 정기전 설정</b><button class="setx" id="regClose">&times;</button></div>
+    <div class="sub">주 몇 회, 무슨 요일에 모일지 정하면 회차가 자동으로 계산됩니다.</div>
+
+    <div class="reglab">주 횟수</div>
+    <div class="setseg" id="regFreq">
+      <button type="button" data-n="1">주 1회</button>
+      <button type="button" data-n="2">주 2회</button>
+      <button type="button" data-n="3">주 3회</button>
+    </div>
+
+    <div class="reglab">요일 <span class="cnt" id="regDowCnt"></span></div>
+    <div class="dowpick" id="regDow">
+      <button type="button" class="sun" data-w="0">일</button>
+      <button type="button" data-w="1">월</button>
+      <button type="button" data-w="2">화</button>
+      <button type="button" data-w="3">수</button>
+      <button type="button" data-w="4">목</button>
+      <button type="button" data-w="5">금</button>
+      <button type="button" class="sat" data-w="6">토</button>
+    </div>
+
+    <div class="reglab">시작 날짜</div>
+    <input id="regFrom" class="inp" type="date" style="width:100%">
+
+    <div class="reglab">적용 기간</div>
+    <div class="setseg" id="regSpan">
+      <button type="button" data-m="1">1개월</button>
+      <button type="button" data-m="3">3개월</button>
+      <button type="button" data-m="6">6개월</button>
+      <button type="button" data-m="12">12개월</button>
+    </div>
+
+    <div class="reglab">시작 회차</div>
+    <input id="regStart" class="inp" type="number" inputmode="numeric" min="1" max="9999" style="width:100%">
+    <div class="sub" style="margin-top:6px; font-size:.75rem;">시작 날짜 이전의 마지막 회차 다음 번호가 자동으로 들어갑니다.</div>
+
+    <div class="regprev" id="regPrev"></div>
+    <div class="msg" id="regMsg"></div>
+    <button class="sbtn" id="regApply" style="width:100%; margin-top:12px;">정기전 등록</button>
+    <div class="sub" style="margin-top:8px; font-size:.75rem;">적용 기간 안에 이미 등록된 정기전은 새 일정으로 대체됩니다.</div>
+  </div>
+</div>
 
 <script>
   // 테스트(beta) 배포에서만 눈에 띄는 배지 — 본 앱과 헷갈리지 않도록

@@ -209,7 +209,7 @@ function cellR2Html(key){
 function cellR3Html(key){
   const g = gameCnt[key], c = counts[key] || { o: 0, x: 0 };
   // 오늘 친 판수를 바로 띄우면 아직 유효한 O/X 와 자리를 다툰다 → 판수는 날짜가 지난 뒤부터.
-  if (isPast(key)) return g ? `<span class="gchip">🎱 ${g}판</span>` : '';
+  if (isPast(key)) return g ? `<span class="gchip">${g}판</span>` : '';
   return (c.o || c.x) ? `<b class="vo">${c.o}</b><i class="vsep">/</i><b class="vx">${c.x}</b>` : '';
 }
 
@@ -393,8 +393,10 @@ let brush = 'o';            // 'o' | 'x' | null(지우기 — 표를 없앤다)
 let bulkMsgText = '', bulkMsgKind = '';   // 안내문은 다시 그려도 남아야 해서 상태로 둔다
 
 function bulkBarHtml(){
+  // 붓 모드가 아닐 때만 팀장에게 '정기전 설정'을 함께 보인다 — 칠하는 중엔 자리를 다투지 않게.
   if (!bulkMode) return `<div class="bulkbar" style="justify-content:flex-end">
-      <button type="button" class="bulkbtn" id="bulkOn">🖌️ 일괄 선택</button>
+      ${isTeamLeader ? '<button type="button" class="bulkbtn" id="regOn">정기전 설정</button>' : ''}
+      <button type="button" class="bulkbtn" id="bulkOn">일괄 선택</button>
     </div>`;
   const on = b => brush === b ? ' on' : '';
   return `<div class="bulkbar">
@@ -410,6 +412,8 @@ function bulkBarHtml(){
 }
 
 function bindBulkBar(){
+  const reg = $('#regOn');
+  if (reg) reg.onclick = openRegModal;
   const on = $('#bulkOn');
   if (on) on.onclick = () => { bulkMode = true; bulkMsg(''); render(); };
   const off = $('#bulkOff');
@@ -1063,6 +1067,193 @@ async function delEvent(){
     msg('삭제했습니다.', 'ok');
   } catch(e){ msg('삭제 실패: ' + (e.message || '알 수 없는 오류'), 'err'); }
 }
+
+// ══ 정기전 자동 편성 (팀장) ══
+// 날짜를 하나씩 열어 회차를 적는 대신, '주 몇 회 · 무슨 요일'만 정하면 그 규칙에 맞는 날을
+// 전부 뽑아 회차를 차례로 매겨 넣는다. 시작 회차는 시작 날짜 이전의 마지막 회차에서 이어 붙인다.
+const LS_REG = 'dangRegPlan';
+const REG_MAX = 400;                     // 한 번에 만들 수 있는 최대 회차 수 (실수로 몇 년치를 채우는 걸 막는다)
+
+let regFreq = 1;          // 주 횟수 — 고를 수 있는 요일 개수를 이 값이 정한다
+let regDows = [];         // 고른 요일 (0=일 … 6=토) — 고른 순서대로 담아 두고, 넘치면 가장 먼저 고른 걸 뺀다
+let regMonths = 3;        // 적용 기간(개월)
+let regTouchedStart = false;   // 시작 회차를 손으로 고쳤으면 자동 채우기를 멈춘다
+
+const regCfgKey = () => LS_REG + ':' + (currentTeam || 'none');
+function regSaveCfg(){
+  try { localStorage.setItem(regCfgKey(), JSON.stringify({ freq: regFreq, dows: regDows, months: regMonths })); } catch(e){}
+}
+function regLoadCfg(){
+  try { return JSON.parse(localStorage.getItem(regCfgKey())); } catch(e){ return null; }
+}
+
+// key 에서 n 개월 뒤. 31일에 한 달을 더하면 다음 달을 넘어가므로 그 달의 마지막 날로 눌러 준다.
+function addMonths(key, n){
+  const [y, m, d] = key.split('-').map(Number);
+  const last = new Date(y, m - 1 + n + 1, 0).getDate();
+  return ymd(new Date(y, m - 1 + n, Math.min(d, last)));
+}
+
+// 지금 설정으로 잡히는 정기전 날짜들 (오름차순)
+function regDates(){
+  const from = $('#regFrom').value;
+  if (!from || !regDows.length) return [];
+  const end = addMonths(from, regMonths);
+  const [y, m, d] = from.split('-').map(Number);
+  const out = [];
+  for (const dt = new Date(y, m - 1, d); ymd(dt) <= end && out.length < REG_MAX; dt.setDate(dt.getDate() + 1))
+    if (regDows.includes(dt.getDay())) out.push(ymd(dt));
+  return out;
+}
+
+function regMsg(t, kind){
+  const el = $('#regMsg');
+  el.textContent = t || '';
+  el.className = 'msg' + (kind ? ' ' + kind : '');
+}
+
+// 시작 날짜 이전의 마지막 회차 + 1 — 앞선 정기전에서 번호가 끊기지 않게 이어 붙인다.
+async function regFillStart(){
+  if (regTouchedStart || !currentTeam) return;
+  const from = $('#regFrom').value;
+  if (!from) return;
+  let last = 0;
+  try {
+    const rows = await sbFetch(`/rest/v1/club_events?select=round_no&team_id=eq.${currentTeam}`
+      + `&event_date=lt.${from}&round_no=not.is.null&order=round_no.desc&limit=1`);
+    if (Array.isArray(rows) && rows[0] && rows[0].round_no) last = rows[0].round_no;
+  } catch(e){ /* 못 읽으면 1회부터 — 팀장이 직접 고치면 된다 */ }
+  if (regTouchedStart) return;           // 기다리는 사이에 손으로 고쳤을 수도 있다
+  $('#regStart').value = last + 1;
+  regSyncPrev();
+}
+
+// 요일 개수가 주 횟수와 맞아야 등록할 수 있다. 미리보기로 몇 회가 언제 잡히는지 먼저 보여 준다.
+function regSyncPrev(){
+  const need = regFreq, got = regDows.length;
+  const cnt = $('#regDowCnt');
+  cnt.textContent = `${got}/${need} 선택`;
+  cnt.className = 'cnt' + (got === need ? '' : ' bad');
+
+  const prev = $('#regPrev');
+  if (got !== need) {
+    prev.innerHTML = `요일을 <b>${need}개</b> 골라 주세요.`;
+    return;
+  }
+  const dates = regDates();
+  if (!dates.length) { prev.innerHTML = '잡히는 날짜가 없습니다.'; return; }
+  const s = parseInt($('#regStart').value, 10);
+  const start = Number.isFinite(s) && s >= 1 ? s : 1;
+  const endNo = start + dates.length - 1;
+  prev.innerHTML = `총 <b>${dates.length}회</b>`
+    + `<br><span class="rd">${label(dates[0])} 제${start}회</span>`
+    + ` ~ <span class="rd">${label(dates[dates.length - 1])} 제${endNo}회</span>`;
+}
+
+function regSyncDows(){
+  $('#regDow').querySelectorAll('button').forEach(b => {
+    const on = regDows.includes(Number(b.dataset.w));
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', on);
+  });
+  regSyncPrev();
+}
+
+function regSyncSegs(){
+  $('#regFreq').querySelectorAll('button').forEach(b => b.classList.toggle('on', Number(b.dataset.n) === regFreq));
+  $('#regSpan').querySelectorAll('button').forEach(b => b.classList.toggle('on', Number(b.dataset.m) === regMonths));
+}
+
+function openRegModal(){
+  if (!isTeamLeader || !currentTeam) return;
+  const cfg = regLoadCfg();
+  regFreq   = cfg && cfg.freq   ? cfg.freq   : 1;
+  regDows   = cfg && Array.isArray(cfg.dows) ? cfg.dows.slice(0, regFreq) : [];
+  regMonths = cfg && cfg.months ? cfg.months : 3;
+  regTouchedStart = false;
+  $('#regFrom').value = todayStr();
+  $('#regStart').value = '';
+  regMsg('');
+  regSyncSegs();
+  regSyncDows();
+  $('#regModal').classList.add('on');
+  regFillStart();
+}
+
+async function regApply(){
+  if (!isTeamLeader || !currentTeam) return regMsg('팀장만 정기전을 등록할 수 있습니다.', 'err');
+  if (regDows.length !== regFreq) return regMsg(`요일을 ${regFreq}개 골라 주세요.`, 'err');
+  const from = $('#regFrom').value;
+  if (!from) return regMsg('시작 날짜를 골라 주세요.', 'err');
+  const raw = $('#regStart').value.trim();
+  const start = parseInt(raw, 10);
+  if (!Number.isFinite(start) || start < 1) return regMsg('시작 회차는 1 이상의 숫자로 입력해 주세요.', 'err');
+
+  const dates = regDates();
+  if (!dates.length) return regMsg('잡히는 날짜가 없습니다.', 'err');
+  const to = addMonths(from, regMonths);
+  const endNo = start + dates.length - 1;
+  if (!confirm(`${label(dates[0])}부터 ${label(dates[dates.length - 1])}까지\n`
+    + `총 ${dates.length}회 (제${start}회 ~ 제${endNo}회) 정기전을 등록합니다.\n\n`
+    + `이 기간에 이미 등록된 정기전은 새 일정으로 대체됩니다.\n계속할까요?`)) return;
+
+  regMsg('저장 중...');
+  try {
+    // 요일을 바꿨을 때 예전 요일의 정기전이 남지 않도록, 기간을 통째로 비우고 새로 넣는다
+    await sbFetch(`/rest/v1/club_events?team_id=eq.${currentTeam}`
+      + `&event_date=gte.${from}&event_date=lte.${to}`, { method: 'DELETE' });
+    const rows = dates.map((d, i) => ({ team_id: currentTeam, event_date: d, round_no: start + i, note: null }));
+    // 한 번에 다 보내면 URL·본문이 커진다 → 100행씩 끊어 넣는다
+    for (let i = 0; i < rows.length; i += 100) {
+      const part = await sbFetch('/rest/v1/club_events?on_conflict=team_id,event_date', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+        body: JSON.stringify(rows.slice(i, i + 100))
+      });
+      if (!part || !part.length) throw new Error('권한이 없습니다. 팀장만 등록할 수 있습니다.');
+    }
+    regSaveCfg();
+    monthCache = {};                       // 여러 달이 한꺼번에 바뀌었다 — 캐시를 전부 버린다
+    await refresh(true);
+    regMsg(`${dates.length}회 정기전을 등록했습니다. (제${start}회 ~ 제${endNo}회)`, 'ok');
+  } catch(e){
+    regMsg('저장 실패: ' + errText(e), 'err');
+  }
+}
+
+(function initRegModal(){
+  const modal = $('#regModal'); if (!modal) return;
+  const close = () => modal.classList.remove('on');
+  $('#regClose').onclick = close;
+  modal.onclick = e => { if (e.target === modal) close(); };
+
+  $('#regFreq').querySelectorAll('button').forEach(b => b.onclick = () => {
+    regFreq = Number(b.dataset.n);
+    // 주 횟수를 줄이면 나중에 고른 요일부터 떨어져 나간다 (먼저 고른 쪽을 남긴다)
+    if (regDows.length > regFreq) regDows = regDows.slice(0, regFreq);
+    regSyncSegs(); regSyncDows(); regMsg('');
+  });
+
+  $('#regSpan').querySelectorAll('button').forEach(b => b.onclick = () => {
+    regMonths = Number(b.dataset.m);
+    regSyncSegs(); regSyncPrev(); regMsg('');
+  });
+
+  $('#regDow').querySelectorAll('button').forEach(b => b.onclick = () => {
+    const w = Number(b.dataset.w);
+    if (regDows.includes(w)) regDows = regDows.filter(x => x !== w);
+    else {
+      regDows.push(w);
+      // 주 횟수만큼만 남긴다 — 가장 먼저 고른 요일이 밀려난다 (다시 고르는 수고를 던다)
+      if (regDows.length > regFreq) regDows.shift();
+    }
+    regSyncDows(); regMsg('');
+  });
+
+  $('#regFrom').onchange = () => { regSyncPrev(); regFillStart(); regMsg(''); };
+  $('#regStart').oninput = () => { regTouchedStart = true; regSyncPrev(); };
+  $('#regApply').onclick = regApply;
+})();
 
 // ══ 소속 팀 스위처 ══
 function renderTeamBar(){
