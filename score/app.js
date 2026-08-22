@@ -1575,13 +1575,21 @@ const VAPID_PUBLIC = 'BJO7jjlFWFhPntIIWsmk0NTUpW67axk-3ikmxIt9OoXZIHjVx88dFUqhL_
   const dropSub = endpoint => sbFetch(
     '/rest/v1/push_subscriptions_beta?endpoint=eq.' + encodeURIComponent(endpoint),
     { method: 'DELETE', headers: { Prefer: 'return=minimal' } }
-  ).catch(()=>{});
+  ).catch(()=>{});   // 실패해도 구독은 해지된다 — 죽은 주소는 send.js 가 410 받고 정리한다
 
-  // 현재 구독 상태를 스위치에 반영
-  navigator.serviceWorker.ready
-    .then(reg => reg.pushManager.getSubscription())
-    .then(sub => mark(sub && Notification.permission === 'granted'))
-    .catch(()=>{});
+  // 스위치는 추측하지 않고 "이 기기에 구독이 살아 있는가"를 그대로 비춘다.
+  // 설정을 열 때마다 다시 확인한다 — 페이지 로드 때 한 번만 읽으면 껐다 켠 뒤 옛 상태가 남는다.
+  const syncPush = async () => {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      const on = !!sub && Notification.permission === 'granted';
+      mark(on);
+      if (on) saveSub(sub).catch(()=>{});   // 표에 행이 빠져 있으면 조용히 되살린다
+    } catch (_) { mark(false); }
+  };
+  syncPush();
+  $('#btnSettings').addEventListener('click', syncPush);   // initSettings 의 onclick 과 별개로 붙는다
 
   btn.onclick = async () => {
     btn.disabled = true;
@@ -1599,10 +1607,13 @@ const VAPID_PUBLIC = 'BJO7jjlFWFhPntIIWsmk0NTUpW67axk-3ikmxIt9OoXZIHjVx88dFUqhL_
       }
       if (await Notification.requestPermission() !== 'granted') { toast('알림 권한이 없어 켜지 못했습니다'); return; }
       sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(VAPID_PUBLIC) });
-      await saveSub(sub);
+      // 표에 못 넣으면 구독도 되돌린다 — 스위치는 켜졌는데 보낼 주소는 없는 상태를 만들지 않는다.
+      try { await saveSub(sub); }
+      catch (e) { await sub.unsubscribe().catch(()=>{}); throw e; }
       mark(true); toast('알림을 켰습니다');
     } catch (e) {
-      mark(false); toast('알림 설정 실패: ' + (e && e.message || e));
+      toast('알림 설정 실패: ' + (e && e.message || e));
+      syncPush();
     } finally { btn.disabled = false; }
   };
 
