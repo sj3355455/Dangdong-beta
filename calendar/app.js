@@ -770,9 +770,10 @@ async function saveMeetup(){
   try {
     const r = await notifyMeetup(created.id);
     const n = (r && typeof r.sent === 'number') ? r.sent : null;
+    // 0건일 때는 함수가 붙여 준 이유를 그대로 보여 준다 — 원인이 여럿이라 뭉뚱그리면 못 찾는다
     msg(n === null ? '모임을 만들고 알림을 보냈습니다.'
       : n ? `모임을 만들고 ${n}명에게 알림을 보냈습니다.`
-          : '모임을 만들었습니다. (알림을 켠 팀원이 아직 없습니다)', 'ok');
+          : `모임을 만들었습니다. (알림 0건 — ${(r && r.note) || '이유 불명'})`, 'ok');
   } catch(e){
     // 알림만 실패한 경우 — 모임 자체는 멀쩡하다는 걸 분명히 알린다
     msg('모임은 만들었지만 알림을 보내지 못했습니다: ' + errText(e), 'err');

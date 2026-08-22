@@ -47,12 +47,18 @@ Deno.serve(async (req) => {
   if (req.method !== 'POST') return fail('POST 만 받습니다', 405);
 
   const SB_URL = Deno.env.get('SUPABASE_URL')!;
-  const SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  // 관리 권한 키의 이름은 프로젝트가 옛 체계냐 새 체계냐에 따라 다르다 — 있는 걸 쓴다.
+  // 이 키가 없으면 팀원 명단·구독 목록이 RLS 에 막혀 조용히 0건이 되므로, 없으면 여기서 멈춘다.
+  const SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+               || Deno.env.get('SUPABASE_SECRET_KEY')
+               || Deno.env.get('SERVICE_ROLE_KEY');
   const PUB = Deno.env.get('VAPID_PUBLIC_KEY');
   const PRIV = Deno.env.get('VAPID_PRIVATE_KEY');
   const APP_URL = Deno.env.get('APP_URL') || 'https://sj3355455.github.io/Dangdong-beta/';
 
   if (!PUB || !PRIV) return fail('VAPID 키가 등록되지 않았습니다 (Edge Functions → Secrets)', 500);
+  if (!SERVICE) return fail('관리 권한 키를 찾지 못했습니다. Edge Functions → Secrets 에 '
+    + 'SERVICE_ROLE_KEY 라는 이름으로 service_role(또는 secret) 키를 등록해 주세요.', 500);
 
   let meetupId: string;
   try {
@@ -79,19 +85,23 @@ Deno.serve(async (req) => {
   // 2) 여기서부터는 service_role — 팀원 명단과 구독 목록은 RLS 로 막혀 있어 관리 권한이 필요하다
   const admin = createClient(SB_URL, SERVICE);
 
-  const { data: members } = await admin
+  // 조회 오류를 삼키면 '결과 없음'과 구분이 안 된다 — 관리 권한이 모자란 경우가 딱 그렇게 보인다.
+  const { data: members, error: memErr } = await admin
     .from('team_members').select('user_id').eq('team_id', meetup.team_id);
+  if (memErr) return fail('팀원 명단을 읽지 못했습니다: ' + memErr.message, 500);
   const memberIds = (members || []).map((m: { user_id: string }) => m.user_id);
-  if (!memberIds.length) return json({ sent: 0, failed: 0, note: '팀원이 없습니다' });
+  if (!memberIds.length) return json({ sent: 0, failed: 0, note: '이 팀에 팀원이 없습니다' });
 
-  const { data: subs } = await admin
+  const { data: subs, error: subErr } = await admin
     .from('push_subscriptions_beta')
     .select('endpoint, p256dh, auth_key, label, scope, user_id')
     .in('user_id', memberIds);
+  if (subErr) return fail('구독 목록을 읽지 못했습니다: ' + subErr.message, 500);
 
   // 테스트 앱 구독만 — 본 앱으로는 어떤 경우에도 나가지 않는다
   const targets = (subs || []).filter((s: { scope: string | null }) => (s.scope || '').includes('-beta'));
-  if (!targets.length) return json({ sent: 0, failed: 0, note: '알림을 켠 기기가 없습니다' });
+  if (!targets.length) return json({ sent: 0, failed: 0,
+    note: `알림을 켠 기기가 없습니다 (팀원 ${memberIds.length}명, 구독 ${(subs || []).length}건)` });
 
   const { data: creator } = await admin
     .from('profiles').select('display_name').eq('id', meetup.created_by).single();
