@@ -16,7 +16,7 @@ jobs:
         run: |
           # teams 를 찌른다. 비로그인이라 RLS 가 걸러 0행이 오지만, 그래도 DB 를 한 번
           # 깨우는 진짜 질의라 목적에는 충분하다.
-          # (예전엔 profiles 를 찔렀는데, team-isolation.sql 이후로 anon 은 그 표를 못 읽는다)
+          # (예전엔 profiles 를 찔렀는데, sql/team-isolation.sql 이후로 anon 은 그 표를 못 읽는다)
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             "https://ezwassqurbmzcjfmtjop.supabase.co/rest/v1/teams?select=id&limit=1" \
             -H "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6d2Fzc3F1cmJtemNqZm10am9wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQyMjMxOTIsImV4cCI6MjA5OTc5OTE5Mn0.O6eHOO4-yxW7HVmNVjOkakrcoEeF5tORylhG1j79BeU")

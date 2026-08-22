@@ -3,7 +3,7 @@
 // 익명성은 서버(RLS)가 지킨다. 이 파일은 남의 표를 조회하는 코드를 아예 갖고 있지 않다.
 //   · 내 표      : day_votes 에서 내 행만 읽고 쓴다 (RLS 가 남의 행을 막는다)
 //   · 인원수     : vote_counts() 함수가 서버에서 세어 O/X 숫자만 돌려준다
-// 자세한 정책은 저장소 루트의 calendar-sql/ 참고 (1~4 를 순서대로 실행).
+// 자세한 정책은 저장소 루트의 sql/calendar/ 참고 (1~4 를 순서대로 실행).
 import { sbFetch } from '../record/supabase.js';
 import { registerSW, getTheme, applyTheme, LS_THEME, initTeamModal,
          shiftDay, openDayPicker } from '../record/common.js';
@@ -167,7 +167,7 @@ async function loadMonth(force = false){
     loadErr = '내 투표를 불러오지 못했습니다: ' + errText(mine.reason);
   }
 
-  // 일정 기능은 나중에 붙었다. calendar-sql/4-plan-spans.sql 을 아직 안 돌린 서버라면 여기서 404 가 난다.
+  // 일정 기능은 나중에 붙었다. sql/calendar/4-plan-spans.sql 을 아직 안 돌린 서버라면 여기서 404 가 난다.
   // 막대가 안 보일 뿐 달력은 그대로 쓸 수 있으므로 조용히 비워 두고 넘어간다.
   planSpans = (spans.status === 'fulfilled' && Array.isArray(spans.value))
     ? spans.value.map(r => ({ name: r.name, from: r.start_date, to: r.end_date, cnt: r.cnt }))
@@ -183,7 +183,7 @@ const errText = e => (e && (e.message || e.msg)) || '알 수 없는 오류';
 function describeCountErr(e){
   const st = e && e.status;
   if (st === 404 || st === 400) {
-    return '투표 집계 함수(vote_counts)를 찾지 못했습니다. calendar-sql/3-vote-counts.sql 을 Supabase 에서 '
+    return '투표 집계 함수(vote_counts)를 찾지 못했습니다. sql/calendar/3-vote-counts.sql 을 Supabase 에서 '
          + '실행했는지, 실행했다면 스키마 캐시가 갱신됐는지 확인해 주세요. (' + errText(e) + ')';
   }
   if (st === 401 || st === 403) {

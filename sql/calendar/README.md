@@ -18,7 +18,7 @@ Supabase SQL Editor 는 긴 스크립트를 한 번에 붙여넣기 어려워서
 
 ## 앞서 실행해야 하는 것
 
-`teams-setup.sql` → `teams-rls.sql` → 여기(1~4) → (선택) `event-games.sql`
+`../teams-setup.sql` → `../teams-rls.sql` → 여기(1~4) → (선택) `../event-games.sql`
 
 ## 나중에 고칠 때
 

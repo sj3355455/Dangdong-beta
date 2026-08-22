@@ -1079,7 +1079,7 @@ function assignRanksAndCountRemaining(){
   return pendingUnitCount();          // 남은 유닛 수 (팀전은 팀 기준, 개인전은 사람 기준)
 }
 
-// event_id 는 마이그레이션(event-games.sql)이 돌아간 뒤에야 있는 컬럼이다. 아직 없거나
+// event_id 는 마이그레이션(sql/event-games.sql)이 돌아간 뒤에야 있는 컬럼이다. 아직 없거나
 // PostgREST 스키마 캐시가 덜 갱신됐으면 400 으로 떨어지는데, 그 때문에 경기 기록 자체를
 // 잃으면 안 된다. 소속만 떼고 한 번 더 보낸다 — 소속은 나중에 관리자가 붙일 수 있지만
 // 사라진 기록은 되살릴 방법이 없다.

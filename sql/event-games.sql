@@ -1,7 +1,7 @@
 -- ═══════════════════════════════════════════════════════════════
 -- 당동 앱 — 경기를 정기전에 붙이기 (games.event_id)
 -- Supabase 대시보드 → SQL Editor 에 붙여넣고 Run 하세요.
--- calendar-sql/ 의 1~4 를 먼저 실행한 뒤에 돌려야 합니다.
+-- calendar/ 의 1~4 를 먼저 실행한 뒤에 돌려야 합니다.
 -- 여러 번 실행해도 안전합니다 (멱등).
 --
 -- 왜 필요한가:
@@ -23,7 +23,7 @@
 do $$
 begin
   if to_regclass('public.club_events') is null then
-    raise exception '먼저 calendar-sql/1-tables.sql 을 실행해 주세요. (club_events 테이블이 없습니다)';
+    raise exception '먼저 calendar/1-tables.sql 을 실행해 주세요. (club_events 테이블이 없습니다)';
   end if;
   if to_regclass('public.games') is null then
     raise exception 'games 테이블이 없습니다. 기본 스키마부터 확인해 주세요.';

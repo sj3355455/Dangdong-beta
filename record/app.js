@@ -143,7 +143,7 @@ async function fetchGames() {
     if (auth && auth.token) headers['Authorization'] = 'Bearer ' + auth.token;
   } catch(e) {}
   
-  // event_id 는 마이그레이션(event-games.sql) 이후에만 있는 컬럼이다. 아직 없는 DB에서도
+  // event_id 는 마이그레이션(sql/event-games.sql) 이후에만 있는 컬럼이다. 아직 없는 DB에서도
   // 기록실이 통째로 죽지 않도록, 실패하면 빼고 한 번 더 부른다(정기전 필터만 비활성).
   const base = SB_URL + '/rest/v1/games?select=';
   const tail = '&order=played_at.asc&team_id=eq.' + currentTeam;
@@ -161,7 +161,7 @@ async function fetchGames() {
   }
 }
 
-// 수지 변경 이력. handicap-history.sql 을 아직 안 돌린 DB에서도 홈 탭이 통째로 죽지 않게
+// 수지 변경 이력. sql/handicap-history.sql 을 아직 안 돌린 DB에서도 홈 탭이 통째로 죽지 않게
 // 실패하면 빈 배열 — 수지 상승 카드만 안 뜬다. (팀 구분이 없는 테이블이라 소속 팀 회원으로 걸러 쓴다)
 async function fetchHandicapHistory(){
   if (!currentTeam) return [];
