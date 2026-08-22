@@ -1538,3 +1538,83 @@ init();
 
 // ══ 서비스 워커 등록 + 자동 업데이트 ══ (공통 모듈)
 registerSW();
+
+/* ══ 알림(웹 푸시) — 테스트(beta) 앱 전용 ══════════════════════════
+ * 본 앱에서는 아래 -beta 검사에 걸려 UI 자체가 뜨지 않는다.
+ * 게다가 푸시 구독은 서비스워커 스코프(/Dangdong-beta/)에 묶이므로,
+ * 설령 코드가 본 앱에 올라가더라도 서로 다른 구독이라 알림이 섞일 수 없다.
+ * 보내는 쪽은 저장소 밖의 로컬 스크립트: ~/Documents/dangdong-push/send.js
+ */
+const VAPID_PUBLIC = 'BJO7jjlFWFhPntIIWsmk0NTUpW67axk-3ikmxIt9OoXZIHjVx88dFUqhL_0OxBMvpeVyLdsrn65A8VpOK0KUwF0';
+(function initPush(){
+  const row = $('#setPushRow'), btn = $('#setPush'), testBtn = $('#setPushTest');
+  if (!row || !btn || !testBtn) return;
+  const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  if (!location.pathname.includes('-beta') || !supported) return;   // 본 앱·미지원 브라우저는 조용히 숨긴다
+  row.style.display = ''; testBtn.style.display = '';
+
+  // VAPID 공개키(base64url) → subscribe() 가 요구하는 Uint8Array
+  const b64ToU8 = s => {
+    const raw = atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g,'+').replace(/_/g,'/'));
+    return Uint8Array.from(raw, c => c.charCodeAt(0));
+  };
+  const mark = on => btn.classList.toggle('on', !!on);
+  const device = (navigator.userAgent.match(/iPhone|iPad|Android|Windows|Macintosh/) || ['기타'])[0];
+
+  const saveSub = async sub => {
+    const j = sub.toJSON();
+    await sbFetch('/rest/v1/push_subscriptions_beta', {
+      method: 'POST',
+      headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },   // 같은 기기면 새 행 대신 갱신
+      body: JSON.stringify({
+        endpoint: j.endpoint, p256dh: j.keys.p256dh, auth_key: j.keys.auth,
+        user_id: auth ? auth.uid : null, label: device, scope: location.pathname
+      })
+    });
+  };
+  const dropSub = endpoint => sbFetch(
+    '/rest/v1/push_subscriptions_beta?endpoint=eq.' + encodeURIComponent(endpoint),
+    { method: 'DELETE', headers: { Prefer: 'return=minimal' } }
+  ).catch(()=>{});
+
+  // 현재 구독 상태를 스위치에 반영
+  navigator.serviceWorker.ready
+    .then(reg => reg.pushManager.getSubscription())
+    .then(sub => mark(sub && Notification.permission === 'granted'))
+    .catch(()=>{});
+
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (sub) {                                    // 켜져 있으면 → 끄기
+        await dropSub(sub.endpoint);
+        await sub.unsubscribe();
+        mark(false); toast('알림을 껐습니다');
+        return;
+      }
+      if (Notification.permission === 'denied') {
+        toast('브라우저에서 알림이 차단돼 있어요 — 기기 설정에서 허용해 주세요'); return;
+      }
+      if (await Notification.requestPermission() !== 'granted') { toast('알림 권한이 없어 켜지 못했습니다'); return; }
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(VAPID_PUBLIC) });
+      await saveSub(sub);
+      mark(true); toast('알림을 켰습니다');
+    } catch (e) {
+      mark(false); toast('알림 설정 실패: ' + (e && e.message || e));
+    } finally { btn.disabled = false; }
+  };
+
+  // 서버 없이 이 기기에서 바로 띄워 보는 확인용 — 알림이 보이는지/모양이 맞는지만 점검
+  testBtn.onclick = async () => {
+    if (Notification.permission !== 'granted' && await Notification.requestPermission() !== 'granted') {
+      toast('알림 권한이 없습니다'); return;
+    }
+    const reg = await navigator.serviceWorker.ready;
+    await reg.showNotification('당동 테스트', {
+      body: '알림이 잘 보이면 성공이에요 🎱',
+      icon: '../icons/icon-192.png', badge: '../icons/icon-192.png', tag: 'dangdong'
+    });
+  };
+})();

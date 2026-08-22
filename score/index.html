@@ -378,6 +378,9 @@ select.field{appearance:none;background-image:
     <button class="setlink" id="setTeam">👥 팀 설정</button>
     <button class="setlink" id="setMe">👤 내 정보 설정</button>
     <div class="setrow"><span class="lb">🔊 점수 음성</span><button class="sw" id="setVoice" aria-label="점수 음성"></button></div>
+    <!-- 알림: 테스트(beta) 앱에서만 노출된다 — app.js 의 initPush() 가 켠다 -->
+    <div class="setrow" id="setPushRow" style="display:none;"><span class="lb">🔔 알림 받기</span><button class="sw" id="setPush" aria-label="알림 받기"></button></div>
+    <button class="setlink" id="setPushTest" style="display:none;">🔔 지금 알림 하나 띄워보기</button>
     <div class="setrow" style="flex-direction:column; align-items:stretch; gap:10px;">
       <span class="lb">🎨 화면 테마</span>
       <div class="setseg" id="setTheme">
