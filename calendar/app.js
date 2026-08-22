@@ -1028,43 +1028,93 @@ function renderAgg(key){
   });
 }
 
+// ══ 회차 다시 매기기 ══
+// 회차는 '몇 번째 모임인가'라는 뜻이다. 그래서 중간에 하나가 빠지면 뒤가 한 칸씩 당겨져야 한다 —
+// 3회를 취소했으면 4회가 3회가 되어야지, 3회를 건너뛰고 4회로 남으면 안 된다.
+// 회차를 행마다 들고 있으므로, 바뀐 날 뒤쪽을 전부 다시 매겨 저장한다. (앞쪽은 건드리지 않는다)
+
+// 이 날짜 바로 앞의 정기전 — 뒤쪽을 몇 번부터 이어 매길지 여기서 정해진다
+async function prevEvent(key){
+  const rows = await sbFetch(`/rest/v1/club_events?select=event_date,round_no&team_id=eq.${currentTeam}`
+    + `&event_date=lt.${key}&order=event_date.desc&limit=1`);
+  return (Array.isArray(rows) && rows[0]) ? rows[0] : null;
+}
+
+// fromDate 이후(포함)의 정기전을 startNo 부터 차례로 다시 매긴다. 바뀐 행 수를 돌려준다.
+// 값이 이미 맞는 행은 보내지 않는다 — 대부분의 경우 실제로 고칠 행은 몇 개뿐이다.
+async function resequenceFrom(fromDate, startNo){
+  if (!currentTeam) return 0;
+  const rows = await sbFetch(`/rest/v1/club_events?select=event_date,round_no,note&team_id=eq.${currentTeam}`
+    + `&event_date=gte.${fromDate}&order=event_date.asc`);
+  if (!Array.isArray(rows) || !rows.length) return 0;
+  const changed = [];
+  let n = startNo;
+  for (const r of rows) {
+    if (r.round_no !== n)
+      // note 를 같이 실어야 한다 — merge-duplicates 는 안 보낸 열을 null 로 덮어쓴다
+      changed.push({ team_id: currentTeam, event_date: r.event_date, round_no: n, note: r.note || null });
+    n++;
+  }
+  for (let i = 0; i < changed.length; i += 100)
+    await sbFetch('/rest/v1/club_events?on_conflict=team_id,event_date', {
+      method: 'POST',
+      headers: { Prefer: 'resolution=merge-duplicates' },
+      body: JSON.stringify(changed.slice(i, i + 100))
+    });
+  return changed.length;
+}
+
+// 회차가 여러 달에 걸쳐 바뀌므로 캐시를 통째로 버리고 다시 읽는다
+async function afterResequence(){ monthCache = {}; await refresh(true); }
+const reseqNote = n => n ? ` 뒤따르는 정기전 ${n}개의 회차를 다시 매겼습니다.` : '';
+
 // 정기전 등록/수정 (팀장 — 사이트 전체 관리자와는 다른 권한이다)
 async function saveEvent(){
   if (!isTeamLeader || !currentTeam) return;
   const key = openKey;
   const raw = $('#dsRound').value.trim();
-  const round = raw === '' ? null : parseInt(raw, 10);
+  let round = raw === '' ? null : parseInt(raw, 10);
   if (raw !== '' && (!Number.isFinite(round) || round < 1)) return msg('회차는 1 이상의 숫자로 입력해 주세요.', 'err');
   const note = $('#dsNote').value.trim() || null;
   msg('저장 중...');
   try {
+    // 비워 두면 앞 정기전 다음 번호를 자동으로 매긴다 (앞에 아무것도 없으면 1회)
+    if (round == null) {
+      const p = await prevEvent(key);
+      round = (p && p.round_no != null) ? p.round_no + 1 : 1;
+    }
     const rows = await sbFetch('/rest/v1/club_events?on_conflict=team_id,event_date', {
       method: 'POST',
       headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
       body: JSON.stringify({ team_id: currentTeam, event_date: key, round_no: round, note })
     });
     if (!rows || !rows.length) throw new Error('권한이 없습니다. 팀장만 등록할 수 있습니다.');
-    events[key] = rows[0];
-    updateMonthCache();
-    render();
+    // 방금 정한 번호가 기준이 되어 그 뒤가 줄줄이 따라온다
+    const n = await resequenceFrom(shiftDay(key, 1), round + 1);
+    await afterResequence();
     openDay(key);              // 시트 내용 갱신 — msg 를 지우므로 안내는 그 뒤에 띄운다
-    msg('정기전을 저장했습니다.', 'ok');
+    msg(`제${round}회 정기전으로 저장했습니다.` + reseqNote(n), 'ok');
   } catch(e){ msg('저장 실패: ' + (e.message || '알 수 없는 오류'), 'err'); }
 }
 
 async function delEvent(){
   if (!isTeamLeader || !currentTeam) return;
   const key = openKey;
-  if (!events[key]) return;
-  if (!confirm(`${label(key)} 정기전 기록을 지울까요?`)) return;
+  const gone = events[key];
+  if (!gone) return;
+  if (!confirm(`${label(key)} 정기전을 지울까요?\n(뒤따르는 정기전의 회차가 하나씩 당겨집니다)`)) return;
   msg('삭제 중...');
   try {
     await sbFetch(`/rest/v1/club_events?team_id=eq.${currentTeam}&event_date=eq.${key}`, { method: 'DELETE' });
-    delete events[key];
-    updateMonthCache();
-    render();
+    // 지운 날 앞의 정기전 다음 번호부터 다시 매긴다. 앞에 아무것도 없으면 지운 회차를 그대로 물려준다
+    // (제1회를 취소하면 다음 정기전이 제1회가 된다)
+    const p = await prevEvent(key);
+    const startNo = (p && p.round_no != null) ? p.round_no + 1
+                  : (gone.round_no != null ? gone.round_no : 1);
+    const n = await resequenceFrom(key, startNo);   // 이 날은 이제 비었으니 그 뒤부터 매겨진다
+    await afterResequence();
     openDay(key);
-    msg('삭제했습니다.', 'ok');
+    msg('삭제했습니다.' + reseqNote(n), 'ok');
   } catch(e){ msg('삭제 실패: ' + (e.message || '알 수 없는 오류'), 'err'); }
 }
 
@@ -1212,10 +1262,12 @@ async function regApply(){
       });
       if (!part || !part.length) throw new Error('권한이 없습니다. 팀장만 등록할 수 있습니다.');
     }
+    // 적용 기간 뒤에 남아 있던 정기전들도 새 회차에 이어 붙인다
+    const after = await resequenceFrom(shiftDay(to, 1), endNo + 1);
     regSaveCfg();
-    monthCache = {};                       // 여러 달이 한꺼번에 바뀌었다 — 캐시를 전부 버린다
-    await refresh(true);
-    regMsg(`${dates.length}회 정기전을 등록했습니다. (제${start}회 ~ 제${endNo}회)`, 'ok');
+    await afterResequence();               // 여러 달이 한꺼번에 바뀌었다 — 캐시를 전부 버리고 다시 읽는다
+    regMsg(`${dates.length}회 정기전을 등록했습니다. (제${start}회 ~ 제${endNo}회)`
+      + (after ? ` 이후 정기전 ${after}개의 회차도 이어 맞췄습니다.` : ''), 'ok');
   } catch(e){
     regMsg('저장 실패: ' + errText(e), 'err');
   }

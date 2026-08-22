@@ -368,11 +368,12 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
     <div class="admbox" id="dsAdm" style="display:none;">
       <div style="font-size:.82rem; color:var(--muted); margin-bottom:8px; font-weight:600;">👑 정기전 설정 (팀장)</div>
       <div class="admrow">
-        <input id="dsRound" class="inp" type="number" inputmode="numeric" min="1" max="9999" placeholder="회차 (예: 12)">
+        <input id="dsRound" class="inp" type="number" inputmode="numeric" min="1" max="9999" placeholder="회차 (비우면 자동)">
         <button id="dsSave" class="sbtn">저장</button>
         <button id="dsDel" class="dbtn">삭제</button>
       </div>
       <input id="dsNote" class="inp" maxlength="30" placeholder="메모 (선택 · 장소 등)" style="margin-top:8px;">
+      <div class="sub" style="margin-top:8px; font-size:.75rem;">회차는 날짜 순서대로 자동 계산됩니다. 하나를 지우면 뒤따르는 정기전이 한 칸씩 당겨집니다.</div>
     </div>
 
     <div class="msg" id="dsMsg"></div>
