@@ -24,13 +24,19 @@ let isTeamLeader = false;
 let cur = new Date(); cur.setDate(1); cur.setHours(0, 0, 0, 0);
 
 // 이번 달 데이터 — 모두 'YYYY-MM-DD' 를 키로 쓴다
-let events = {};    // 날짜 → { id, round_no, note }
+let events = {};    // 날짜 → { id, note } — 회차는 담지 않는다 (eventSeq 가 순서로 계산한다)
 let gameCnt = {};   // 날짜 → 경기 판수
 let counts = {};    // 날짜 → { o, x }
 let myVote = {};    // 날짜 → { c:'o'|'x', slots, from, to } — day_votes 의 내 행. slots 은 시간대 비트합
                     // (from/to 는 slots 이전 기록을 환산할 때만 쓴다)
 let planSpans = []; // 이 달에 걸린 일정 막대 [{ name, from, to, cnt }] — 이름·기간·인원수만 (익명)
 let myPlans = [];   // 내가 등록한 일정 [{ id, name, start_date, end_date }] — 지우려면 이게 필요하다
+
+// 회차는 저장하지 않는다 — '몇 번째 모임인가'가 곧 회차라서, 팀의 정기전을 날짜순으로 세면 그게 답이다.
+// 덕분에 하나를 지우거나 끼워 넣어도 뒤 회차가 저절로 맞는다 (다시 써 넣을 행이 없다).
+// 달마다가 아니라 팀 전체를 한 번에 받아 둔다 — 날짜만 받으므로 몇 년치라도 가볍다.
+let eventSeq = null;   // 'YYYY-MM-DD' → 회차(1부터)
+let seqTeam = null;    // 그 표가 어느 팀 것인지
 let loading = false;
 let loadErr = '';   // 이번 달 데이터를 못 불러온 이유 (화면에 그대로 띄운다)
 
@@ -52,6 +58,28 @@ const label = key => {
   const d = new Date(y, m - 1, dd);
   return `${m}월 ${dd}일 (${DOW[d.getDay()]})`;
 };
+
+// 팀의 정기전을 날짜순으로 세어 회차 표를 만든다
+async function ensureSeq(force = false){
+  if (!currentTeam) { eventSeq = null; seqTeam = null; return; }
+  if (!force && eventSeq && seqTeam === currentTeam) return;
+  try {
+    const rows = await sbFetch(`/rest/v1/club_events?select=event_date&team_id=eq.${currentTeam}`
+      + `&order=event_date.asc`);
+    const m = new Map();
+    if (Array.isArray(rows)) rows.forEach((r, i) => m.set(r.event_date, i + 1));
+    eventSeq = m; seqTeam = currentTeam;
+  } catch(e){ if (!eventSeq) eventSeq = new Map(); }   // 못 읽으면 회차만 안 보인다
+}
+const roundOf = key => (eventSeq && eventSeq.get(key)) || null;
+// 이 날짜 앞에 있는 정기전 수 — 일괄 등록 미리보기에서 '몇 회부터 시작인지' 계산에 쓴다
+const countBefore = key => eventSeq ? [...eventSeq.keys()].filter(k => k < key).length : 0;
+
+// 정기전을 더하거나 지운 뒤 — 회차가 여러 달에 걸쳐 밀리므로 전부 다시 읽는다
+async function afterEventChange(){
+  monthCache = {}; eventSeq = null;
+  await refresh(true);
+}
 
 // ══ 데이터 ══
 async function loadTeams(){
@@ -110,19 +138,20 @@ function applyCache(c){
 }
 
 async function loadMonth(force = false){
-  if (!currentTeam) { clearMonth(); return; }
+  if (!currentTeam) { clearMonth(); eventSeq = null; seqTeam = null; return; }
   const cacheKey = getMonthKey();
-  if (!force && monthCache[cacheKey]) { applyCache(monthCache[cacheKey]); return; }
+  if (!force && monthCache[cacheKey]) { applyCache(monthCache[cacheKey]); await ensureSeq(); return; }
 
   clearMonth();
   const [d1, d2] = monthRange();
   const auth = getAuth();
+  const seqP = ensureSeq(true);          // 회차 표는 달과 무관하므로 나머지와 나란히 받아 온다
 
   // 다음 달 1일 00:00 (경기 조회 상한 — played_at 은 timestamptz 라 날짜 비교가 아니라 범위로 자른다)
   const nextMonth = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
 
   const [ev, games, cnt, mine, spans, plans] = await Promise.allSettled([
-    sbFetch(`/rest/v1/club_events?select=id,event_date,round_no,note&team_id=eq.${currentTeam}`
+    sbFetch(`/rest/v1/club_events?select=id,event_date,note&team_id=eq.${currentTeam}`
           + `&event_date=gte.${d1}&event_date=lte.${d2}`),
     sbFetch(`/rest/v1/games?select=played_at&team_id=eq.${currentTeam}`
           + `&played_at=gte.${d1}T00:00:00&played_at=lt.${ymd(nextMonth)}T00:00:00`),
@@ -174,6 +203,7 @@ async function loadMonth(force = false){
     : [];
   myPlans = (plans.status === 'fulfilled' && Array.isArray(plans.value)) ? plans.value : [];
 
+  await seqP;
   updateMonthCache();
 }
 
@@ -196,11 +226,11 @@ function describeCountErr(e){
 // 칸 둘째 줄 — 정기전 회차. 일정 막대가 앉는 자리와 같지만, 막대는 정기전 칸을 비켜 가므로
 // (barsForWeek 의 skip) 둘이 한 칸에서 겹치는 일은 없다.
 function cellR2Html(key){
-  const ev = events[key];
-  if (!ev) return '';
+  if (!events[key]) return '';
+  const n = roundOf(key);
   // 회차가 세 자리면 좁은 폰(320px)에서 '제12…' 로 잘려 엉뚱한 회차로 읽힌다 → 그때만 한 호 줄인다
-  const sm = String(ev.round_no || '').length >= 3 ? ' sm' : '';
-  return `<span class="evchip${sm}">${ev.round_no ? '제' + esc(ev.round_no) + '회' : '정기전'}</span>`;
+  const sm = String(n || '').length >= 3 ? ' sm' : '';
+  return `<span class="evchip${sm}">${n ? '제' + n + '회' : '정기전'}</span>`;
 }
 
 // 칸 셋째 줄 — 지난 날은 '몇 판 쳤나', 오늘·앞으로는 '몇 명 되나'. 그 시점에 쓸모 있는 쪽만 남긴다.
@@ -704,7 +734,7 @@ function openDay(key){
   $('#dsTitle').textContent = label(key);
 
   const bits = [];
-  if (ev) bits.push(ev.round_no ? `🏅 제${ev.round_no}회 정기전` : '🏅 정기전');
+  if (ev) { const n = roundOf(key); bits.push(n ? `🏅 제${n}회 정기전` : '🏅 정기전'); }
   if (ev && ev.note) bits.push(esc(ev.note));
   if (g) bits.push(`🎱 ${g}판`);
   $('#dsInfo').innerHTML = bits.join(' · ') || '기록된 일정이 없습니다.';
@@ -732,8 +762,8 @@ function openDay(key){
   const adm = $('#dsAdm');
   adm.style.display = isTeamLeader ? 'block' : 'none';
   if (isTeamLeader) {
-    $('#dsRound').value = ev && ev.round_no != null ? ev.round_no : '';
     $('#dsNote').value = ev && ev.note ? ev.note : '';
+    $('#dsSave').textContent = ev ? '저장' : '지정';
     $('#dsDel').style.display = ev ? '' : 'none';
   }
   msg('');
@@ -1028,93 +1058,39 @@ function renderAgg(key){
   });
 }
 
-// ══ 회차 다시 매기기 ══
-// 회차는 '몇 번째 모임인가'라는 뜻이다. 그래서 중간에 하나가 빠지면 뒤가 한 칸씩 당겨져야 한다 —
-// 3회를 취소했으면 4회가 3회가 되어야지, 3회를 건너뛰고 4회로 남으면 안 된다.
-// 회차를 행마다 들고 있으므로, 바뀐 날 뒤쪽을 전부 다시 매겨 저장한다. (앞쪽은 건드리지 않는다)
-
-// 이 날짜 바로 앞의 정기전 — 뒤쪽을 몇 번부터 이어 매길지 여기서 정해진다
-async function prevEvent(key){
-  const rows = await sbFetch(`/rest/v1/club_events?select=event_date,round_no&team_id=eq.${currentTeam}`
-    + `&event_date=lt.${key}&order=event_date.desc&limit=1`);
-  return (Array.isArray(rows) && rows[0]) ? rows[0] : null;
-}
-
-// fromDate 이후(포함)의 정기전을 startNo 부터 차례로 다시 매긴다. 바뀐 행 수를 돌려준다.
-// 값이 이미 맞는 행은 보내지 않는다 — 대부분의 경우 실제로 고칠 행은 몇 개뿐이다.
-async function resequenceFrom(fromDate, startNo){
-  if (!currentTeam) return 0;
-  const rows = await sbFetch(`/rest/v1/club_events?select=event_date,round_no,note&team_id=eq.${currentTeam}`
-    + `&event_date=gte.${fromDate}&order=event_date.asc`);
-  if (!Array.isArray(rows) || !rows.length) return 0;
-  const changed = [];
-  let n = startNo;
-  for (const r of rows) {
-    if (r.round_no !== n)
-      // note 를 같이 실어야 한다 — merge-duplicates 는 안 보낸 열을 null 로 덮어쓴다
-      changed.push({ team_id: currentTeam, event_date: r.event_date, round_no: n, note: r.note || null });
-    n++;
-  }
-  for (let i = 0; i < changed.length; i += 100)
-    await sbFetch('/rest/v1/club_events?on_conflict=team_id,event_date', {
-      method: 'POST',
-      headers: { Prefer: 'resolution=merge-duplicates' },
-      body: JSON.stringify(changed.slice(i, i + 100))
-    });
-  return changed.length;
-}
-
-// 회차가 여러 달에 걸쳐 바뀌므로 캐시를 통째로 버리고 다시 읽는다
-async function afterResequence(){ monthCache = {}; await refresh(true); }
-const reseqNote = n => n ? ` 뒤따르는 정기전 ${n}개의 회차를 다시 매겼습니다.` : '';
-
-// 정기전 등록/수정 (팀장 — 사이트 전체 관리자와는 다른 권한이다)
+// 정기전 지정/해제 (팀장 — 사이트 전체 관리자와는 다른 권한이다)
+// 회차는 받지 않는다. 날짜만 정하면 순서가 회차를 정한다.
 async function saveEvent(){
   if (!isTeamLeader || !currentTeam) return;
   const key = openKey;
-  const raw = $('#dsRound').value.trim();
-  let round = raw === '' ? null : parseInt(raw, 10);
-  if (raw !== '' && (!Number.isFinite(round) || round < 1)) return msg('회차는 1 이상의 숫자로 입력해 주세요.', 'err');
   const note = $('#dsNote').value.trim() || null;
   msg('저장 중...');
   try {
-    // 비워 두면 앞 정기전 다음 번호를 자동으로 매긴다 (앞에 아무것도 없으면 1회)
-    if (round == null) {
-      const p = await prevEvent(key);
-      round = (p && p.round_no != null) ? p.round_no + 1 : 1;
-    }
     const rows = await sbFetch('/rest/v1/club_events?on_conflict=team_id,event_date', {
       method: 'POST',
       headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
-      body: JSON.stringify({ team_id: currentTeam, event_date: key, round_no: round, note })
+      body: JSON.stringify({ team_id: currentTeam, event_date: key, round_no: null, note })
     });
     if (!rows || !rows.length) throw new Error('권한이 없습니다. 팀장만 등록할 수 있습니다.');
-    // 방금 정한 번호가 기준이 되어 그 뒤가 줄줄이 따라온다
-    const n = await resequenceFrom(shiftDay(key, 1), round + 1);
-    await afterResequence();
+    await afterEventChange();
     openDay(key);              // 시트 내용 갱신 — msg 를 지우므로 안내는 그 뒤에 띄운다
-    msg(`제${round}회 정기전으로 저장했습니다.` + reseqNote(n), 'ok');
+    const n = roundOf(key);
+    msg(n ? `제${n}회 정기전으로 저장했습니다.` : '정기전을 저장했습니다.', 'ok');
   } catch(e){ msg('저장 실패: ' + (e.message || '알 수 없는 오류'), 'err'); }
 }
 
 async function delEvent(){
   if (!isTeamLeader || !currentTeam) return;
   const key = openKey;
-  const gone = events[key];
-  if (!gone) return;
-  if (!confirm(`${label(key)} 정기전을 지울까요?\n(뒤따르는 정기전의 회차가 하나씩 당겨집니다)`)) return;
+  if (!events[key]) return;
+  const n = roundOf(key);
+  if (!confirm(`${label(key)}${n ? ` 제${n}회` : ''} 정기전을 지울까요?\n(뒤따르는 정기전의 회차가 하나씩 당겨집니다)`)) return;
   msg('삭제 중...');
   try {
     await sbFetch(`/rest/v1/club_events?team_id=eq.${currentTeam}&event_date=eq.${key}`, { method: 'DELETE' });
-    // 지운 날 앞의 정기전 다음 번호부터 다시 매긴다. 앞에 아무것도 없으면 지운 회차를 그대로 물려준다
-    // (제1회를 취소하면 다음 정기전이 제1회가 된다)
-    const p = await prevEvent(key);
-    const startNo = (p && p.round_no != null) ? p.round_no + 1
-                  : (gone.round_no != null ? gone.round_no : 1);
-    const n = await resequenceFrom(key, startNo);   // 이 날은 이제 비었으니 그 뒤부터 매겨진다
-    await afterResequence();
+    await afterEventChange();
     openDay(key);
-    msg('삭제했습니다.' + reseqNote(n), 'ok');
+    msg('삭제했습니다. 뒤따르는 회차가 하나씩 당겨졌습니다.', 'ok');
   } catch(e){ msg('삭제 실패: ' + (e.message || '알 수 없는 오류'), 'err'); }
 }
 
@@ -1127,7 +1103,6 @@ const REG_MAX = 400;                     // 한 번에 만들 수 있는 최대 
 let regFreq = 1;          // 주 횟수 — 고를 수 있는 요일 개수를 이 값이 정한다
 let regDows = [];         // 고른 요일 (0=일 … 6=토) — 고른 순서대로 담아 두고, 넘치면 가장 먼저 고른 걸 뺀다
 let regMonths = 3;        // 적용 기간(개월)
-let regTouchedStart = false;   // 시작 회차를 손으로 고쳤으면 자동 채우기를 멈춘다
 
 const regCfgKey = () => LS_REG + ':' + (currentTeam || 'none');
 function regSaveCfg(){
@@ -1162,22 +1137,6 @@ function regMsg(t, kind){
   el.className = 'msg' + (kind ? ' ' + kind : '');
 }
 
-// 시작 날짜 이전의 마지막 회차 + 1 — 앞선 정기전에서 번호가 끊기지 않게 이어 붙인다.
-async function regFillStart(){
-  if (regTouchedStart || !currentTeam) return;
-  const from = $('#regFrom').value;
-  if (!from) return;
-  let last = 0;
-  try {
-    const rows = await sbFetch(`/rest/v1/club_events?select=round_no&team_id=eq.${currentTeam}`
-      + `&event_date=lt.${from}&round_no=not.is.null&order=round_no.desc&limit=1`);
-    if (Array.isArray(rows) && rows[0] && rows[0].round_no) last = rows[0].round_no;
-  } catch(e){ /* 못 읽으면 1회부터 — 팀장이 직접 고치면 된다 */ }
-  if (regTouchedStart) return;           // 기다리는 사이에 손으로 고쳤을 수도 있다
-  $('#regStart').value = last + 1;
-  regSyncPrev();
-}
-
 // 요일 개수가 주 횟수와 맞아야 등록할 수 있다. 미리보기로 몇 회가 언제 잡히는지 먼저 보여 준다.
 function regSyncPrev(){
   const need = regFreq, got = regDows.length;
@@ -1192,8 +1151,8 @@ function regSyncPrev(){
   }
   const dates = regDates();
   if (!dates.length) { prev.innerHTML = '잡히는 날짜가 없습니다.'; return; }
-  const s = parseInt($('#regStart').value, 10);
-  const start = Number.isFinite(s) && s >= 1 ? s : 1;
+  // 시작 날짜 앞에 이미 있는 정기전 수가 곧 시작 회차를 정한다 — 팀장이 적을 게 없다
+  const start = countBefore($('#regFrom').value) + 1;
   const endNo = start + dates.length - 1;
   prev.innerHTML = `총 <b>${dates.length}회</b>`
     + `<br><span class="rd">${label(dates[0])} 제${start}회</span>`
@@ -1214,20 +1173,19 @@ function regSyncSegs(){
   $('#regSpan').querySelectorAll('button').forEach(b => b.classList.toggle('on', Number(b.dataset.m) === regMonths));
 }
 
-function openRegModal(){
+async function openRegModal(){
   if (!isTeamLeader || !currentTeam) return;
   const cfg = regLoadCfg();
   regFreq   = cfg && cfg.freq   ? cfg.freq   : 1;
   regDows   = cfg && Array.isArray(cfg.dows) ? cfg.dows.slice(0, regFreq) : [];
   regMonths = cfg && cfg.months ? cfg.months : 3;
-  regTouchedStart = false;
   $('#regFrom').value = todayStr();
-  $('#regStart').value = '';
   regMsg('');
   regSyncSegs();
   regSyncDows();
   $('#regModal').classList.add('on');
-  regFillStart();
+  await ensureSeq();       // 시작 회차를 세려면 회차 표가 있어야 한다
+  regSyncPrev();
 }
 
 async function regApply(){
@@ -1235,13 +1193,12 @@ async function regApply(){
   if (regDows.length !== regFreq) return regMsg(`요일을 ${regFreq}개 골라 주세요.`, 'err');
   const from = $('#regFrom').value;
   if (!from) return regMsg('시작 날짜를 골라 주세요.', 'err');
-  const raw = $('#regStart').value.trim();
-  const start = parseInt(raw, 10);
-  if (!Number.isFinite(start) || start < 1) return regMsg('시작 회차는 1 이상의 숫자로 입력해 주세요.', 'err');
 
   const dates = regDates();
   if (!dates.length) return regMsg('잡히는 날짜가 없습니다.', 'err');
   const to = addMonths(from, regMonths);
+  // 시작 날짜 앞에 이미 있는 정기전 수가 시작 회차를 정한다 (안내용 — 저장하는 값은 아니다)
+  const start = countBefore(from) + 1;
   const endNo = start + dates.length - 1;
   if (!confirm(`${label(dates[0])}부터 ${label(dates[dates.length - 1])}까지\n`
     + `총 ${dates.length}회 (제${start}회 ~ 제${endNo}회) 정기전을 등록합니다.\n\n`
@@ -1252,7 +1209,8 @@ async function regApply(){
     // 요일을 바꿨을 때 예전 요일의 정기전이 남지 않도록, 기간을 통째로 비우고 새로 넣는다
     await sbFetch(`/rest/v1/club_events?team_id=eq.${currentTeam}`
       + `&event_date=gte.${from}&event_date=lte.${to}`, { method: 'DELETE' });
-    const rows = dates.map((d, i) => ({ team_id: currentTeam, event_date: d, round_no: start + i, note: null }));
+    // 회차는 넣지 않는다 — 날짜 순서가 곧 회차라서, 기간 뒤에 남은 정기전도 저절로 이어진다
+    const rows = dates.map(d => ({ team_id: currentTeam, event_date: d, round_no: null, note: null }));
     // 한 번에 다 보내면 URL·본문이 커진다 → 100행씩 끊어 넣는다
     for (let i = 0; i < rows.length; i += 100) {
       const part = await sbFetch('/rest/v1/club_events?on_conflict=team_id,event_date', {
@@ -1262,12 +1220,9 @@ async function regApply(){
       });
       if (!part || !part.length) throw new Error('권한이 없습니다. 팀장만 등록할 수 있습니다.');
     }
-    // 적용 기간 뒤에 남아 있던 정기전들도 새 회차에 이어 붙인다
-    const after = await resequenceFrom(shiftDay(to, 1), endNo + 1);
     regSaveCfg();
-    await afterResequence();               // 여러 달이 한꺼번에 바뀌었다 — 캐시를 전부 버리고 다시 읽는다
-    regMsg(`${dates.length}회 정기전을 등록했습니다. (제${start}회 ~ 제${endNo}회)`
-      + (after ? ` 이후 정기전 ${after}개의 회차도 이어 맞췄습니다.` : ''), 'ok');
+    await afterEventChange();              // 여러 달이 한꺼번에 바뀌었다 — 캐시를 전부 버리고 다시 읽는다
+    regMsg(`${dates.length}회 정기전을 등록했습니다. (제${start}회 ~ 제${endNo}회)`, 'ok');
   } catch(e){
     regMsg('저장 실패: ' + errText(e), 'err');
   }
@@ -1302,8 +1257,7 @@ async function regApply(){
     regSyncDows(); regMsg('');
   });
 
-  $('#regFrom').onchange = () => { regSyncPrev(); regFillStart(); regMsg(''); };
-  $('#regStart').oninput = () => { regTouchedStart = true; regSyncPrev(); };
+  $('#regFrom').onchange = () => { regSyncPrev(); regMsg(''); };
   $('#regApply').onclick = regApply;
 })();
 
