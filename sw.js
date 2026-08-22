@@ -11,7 +11,7 @@
  *  - 그 외 정적 자산(아이콘·매니페스트): 캐시 우선 + 백그라운드 갱신
  *  - 외부 출처(Supabase API 등): 가로채지 않음
  */
-const VERSION = 'v251';
+const VERSION = 'v252';
 // 배포 경로를 자동 감지 → 같은 코드가 /Dangdong/(본 앱)·/Dangdong-beta/(테스트)에서 그대로 동작.
 const BASE = new URL('.', self.location).pathname;   // 예: '/Dangdong/' 또는 '/Dangdong-beta/'
 const CACHE = 'dangdong' + BASE + VERSION;           // 스코프별 캐시 이름 분리(같은 origin이라 겹치면 안 됨)
@@ -48,29 +48,84 @@ self.addEventListener('message', e => {
 });
 
 /* ── 웹 푸시 알림 ─────────────────────────────────────────────────
- * 앱이 꺼져 있어도 서버(로컬 send.js)가 보낸 알림을 여기서 받아 띄운다.
+ * 앱이 꺼져 있어도 서버가 보낸 알림을 여기서 받아 띄운다.
  * 구독은 서비스워커 스코프(BASE)에 묶이므로 본 앱(/Dangdong/)과 테스트 앱(/Dangdong-beta/)은
  * 애초에 서로 다른 구독이다 — 한쪽으로 보낸 알림이 다른 쪽에 갈 수 없다.
+ *
+ * 모임 투표 알림이면 알림 안에 [참석]/[불참] 버튼이 붙는다.
+ * ※ 이 버튼은 안드로이드에서만 보인다. iOS 는 알림 버튼(actions)을 지원하지 않아서
+ *   알림을 누르면 캘린더가 그 모임을 연 채로 뜨고, 거기서 고르게 된다.
  */
+const SB_URL = 'https://ezwassqurbmzcjfmtjop.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6d2Fzc3F1cmJtemNqZm10am9wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQyMjMxOTIsImV4cCI6MjA5OTc5OTE5Mn0.O6eHOO4-yxW7HVmNVjOkakrcoEeF5tORylhG1j79BeU';
+
 self.addEventListener('push', e => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; }
   catch (_) { d = { body: e.data ? e.data.text() : '' }; }
 
-  e.waitUntil(self.registration.showNotification(d.title || '당동', {
+  const opts = {
     body: d.body || '',
     icon: BASE + 'icons/icon-192.png',
     badge: BASE + 'icons/icon-192.png',
     tag: d.tag || 'dangdong',          // 같은 tag 는 알림이 쌓이지 않고 갱신된다
     renotify: true,
-    data: { url: d.url || (BASE + 'score/') }
-  }));
+    data: { url: d.url || (BASE + 'score/'), meetupId: d.meetupId || null }
+  };
+  if (d.meetupId) opts.actions = [
+    { action: 'yes', title: '✅ 참석' },
+    { action: 'no',  title: '❌ 불참' }
+  ];
+
+  e.waitUntil(self.registration.showNotification(d.title || '당동', opts));
 });
 
-// 알림을 누르면: 이미 열려 있는 앱 창이 있으면 그리로, 없으면 새로 연다.
+// 알림에서 참/불참을 눌렀을 때 — 앱을 열지 않고 서버에 바로 표를 남긴다.
+//
+// 서비스워커는 localStorage 를 못 읽어서 로그인 토큰을 쓸 수 없다. 대신 자기 푸시 구독
+// 주소(endpoint)를 알고 있고, 서버가 그 주소로 사람을 찾아 준다(rsvp_by_endpoint).
+async function sendRsvp(meetupId, status){
+  const sub = await self.registration.pushManager.getSubscription();
+  if (!sub) throw new Error('구독 정보가 없습니다');
+  const res = await fetch(SB_URL + '/rest/v1/rpc/rsvp_by_endpoint', {
+    method: 'POST',
+    headers: { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_endpoint: sub.endpoint, p_meetup: meetupId, p_status: status })
+  });
+  if (!res.ok) {
+    let m = '';
+    try { const b = await res.json(); m = b.message || b.hint || ''; } catch (_) {}
+    throw new Error(m || ('오류 ' + res.status));
+  }
+}
+
 self.addEventListener('notificationclick', e => {
+  const data = e.notification.data || {};
+  const url = data.url || (BASE + 'score/');
+  const act = e.action;
   e.notification.close();
-  const url = (e.notification.data && e.notification.data.url) || (BASE + 'score/');
+
+  // 버튼을 눌렀으면 표만 남기고 끝낸다 — 앱을 여는 건 오히려 방해다.
+  if (act === 'yes' || act === 'no') {
+    e.waitUntil((async () => {
+      const base = { icon: BASE + 'icons/icon-192.png', badge: BASE + 'icons/icon-192.png',
+                     tag: e.notification.tag, data };
+      try {
+        await sendRsvp(data.meetupId, act);
+        await self.registration.showNotification(
+          act === 'yes' ? '✅ 참석으로 표시했습니다' : '❌ 불참으로 표시했습니다',
+          { ...base, body: e.notification.body || '' });
+      } catch (err) {
+        // 실패를 조용히 삼키면 눌렀는데 표가 없는 상태가 된다 → 캘린더에서 직접 고르도록 안내한다
+        await self.registration.showNotification('표를 남기지 못했습니다', {
+          ...base, body: (err && err.message || '') + ' — 눌러서 캘린더에서 골라 주세요.'
+        });
+      }
+    })());
+    return;
+  }
+
+  // 알림 본문을 누르면: 이미 열려 있는 앱 창이 있으면 그리로, 없으면 새로 연다.
   e.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const c of wins) {

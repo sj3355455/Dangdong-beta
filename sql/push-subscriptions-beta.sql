@@ -43,9 +43,19 @@ create policy push_beta_update on public.push_subscriptions_beta for update to a
 drop policy if exists push_beta_delete on public.push_subscriptions_beta;
 create policy push_beta_delete on public.push_subscriptions_beta for delete to anon, authenticated using (true);
 
--- 보내는 쪽(send.js)이 anon 키로 목록을 읽을 수 있게 한다.
--- 이 줄을 지우면 send.js 는 service_role 키가 있어야 동작한다 (config.json 의 supabaseKey 교체).
--- 목록이 새 나가도 남이 알림을 대신 보낼 수는 없다 — 푸시 서비스가 구독에 묶인
--- VAPID 개인키 서명을 검사하는데, 그 키는 이 PC 안에만 있다.
+-- ★ 목록 읽기는 아무에게도 열지 않는다.
+--
+-- 알림의 참/불참 버튼은 endpoint 를 신원 증표로 쓴다 (sql/calendar/5-meetups.sql 의
+-- rsvp_by_endpoint). 남의 endpoint 를 알면 그 사람 대신 투표할 수 있다는 뜻이라,
+-- 목록이 새 나가면 안 된다. 그래서 SELECT 정책을 두지 않는다.
+--
+-- 보내는 쪽은 RLS 를 통과하지 않는 service_role 로 읽는다:
+--   · Supabase Edge Function → 환경변수로 service_role 키가 자동 주입된다 (추가 작업 없음)
+--   · 로컬 send.js          → config.json 의 supabaseKey 를 service_role 키로 바꿔야 한다
+--                             (대시보드 → Project Settings → API → service_role)
 drop policy if exists push_beta_select on public.push_subscriptions_beta;
-create policy push_beta_select on public.push_subscriptions_beta for select to anon, authenticated using (true);
+
+-- 내가 켠 알림이 살아 있는지 앱이 확인할 수 있어야 한다 — 딱 내 행만 열어 준다.
+drop policy if exists push_beta_select_mine on public.push_subscriptions_beta;
+create policy push_beta_select_mine on public.push_subscriptions_beta
+  for select to authenticated using (user_id = auth.uid());

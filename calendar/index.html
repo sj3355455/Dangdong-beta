@@ -60,24 +60,12 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
   color:var(--text);font-size:1.1rem;line-height:1;cursor:pointer}
 .mbtn:active{background:var(--hover)}
 
-/* ══ 일괄 선택 (붓 모드) ══ */
-/* 날짜마다 시트를 열고 닫는 게 번거로워서, O/X 를 하나 골라 두고 칸을 눌러(또는 쓸어) 한 번에 남긴다. */
-.bulkbar{display:flex;align-items:center;gap:6px;margin:0 0 10px}
+/* ══ 달력 위 버튼 줄 (모임 만들기 · 정기전 설정) ══ */
+.bulkbar{display:flex;align-items:center;gap:6px;margin:0 0 10px;justify-content:flex-end}
 .bulkbtn{flex:0 0 auto;padding:9px 12px;border-radius:10px;background:var(--card);border:1px solid var(--line);
   color:var(--muted);font-weight:700;font-size:.85rem;font-family:inherit;cursor:pointer;white-space:nowrap}
 .bulkbtn:active{background:var(--hover)}
-.bulkbtn.done{background:var(--accent);border-color:var(--accent);color:#fff}
-.brushes{flex:1 1 auto;display:flex;gap:5px;min-width:0}
-.brushes button{flex:1 1 0;min-width:0;padding:9px 2px;border:1.5px solid var(--line);border-radius:10px;
-  background:var(--card);color:var(--muted);font-size:.85rem;font-weight:700;font-family:inherit;
-  cursor:pointer;white-space:nowrap;overflow:hidden}
-.brushes button:active{transform:scale(.97)}
-.brushes button.o.on{background:var(--ok);border-color:var(--ok);color:var(--card)}
-.brushes button.x.on{background:var(--no);border-color:var(--no);color:var(--card)}
-.brushes button.c.on{background:var(--muted);border-color:var(--muted);color:var(--card)}
-.bulkhint{text-align:center;margin:0 0 8px;font-size:.78rem}
-.bulkmsg{text-align:center;font-size:.82rem;min-height:1.2em;margin-bottom:6px;color:var(--muted)}
-.bulkmsg.err{color:var(--no)} .bulkmsg.ok{color:var(--ok)}
+.bulkbtn.go{background:var(--accent);border-color:var(--accent);color:#fff}
 
 /* ══ 달력 격자 ══ */
 .dow{display:grid;grid-template-columns:repeat(7,1fr);gap:var(--gap);margin-bottom:4px}
@@ -88,9 +76,6 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
 .gridclip{overflow:hidden}
 /* touch-action:pan-y — 세로 스크롤은 브라우저에 맡기고 가로 제스처만 달 넘기기로 받는다 */
 .grid{display:flex;flex-direction:column;gap:var(--gap);touch-action:pan-y}
-/* 붓 모드에서도 세로 스크롤은 브라우저 몫(pan-y)이다 — 가로로 쓸 때만 칠한다.
-   대신 끌면서 날짜 글자가 선택되는 건 막는다. */
-.grid.paint{-webkit-user-select:none;user-select:none}
 .week{position:relative}
 .wrow{display:grid;grid-template-columns:repeat(7,1fr);gap:var(--gap)}
 /* 일정 막대는 칸 위에 얹되 탭은 통과시킨다 (칸을 눌러 날짜 상세가 열려야 하므로) */
@@ -116,11 +101,12 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
    .event 뒤에 둬서 오늘이 정기전이어도 오늘 쪽이 이긴다 — 하루뿐인 표시가 더 급하다.
    (그날이 정기전인 건 가운뎃줄 회차가 그대로 알려 준다) */
 .cell.today{background:var(--line)}
-/* 내가 투표한 날 — 예전엔 오른쪽 위에 O/X 동그라미를 얹었는데, 테두리 색 하나로 충분하다.
-   덕분에 칸 안이 비어 날짜를 가운데로 놓을 수 있다. */
-.cell.vo{border-color:var(--ok);border-width:2px;padding:2px}
-.cell.vx{border-color:var(--no);border-width:2px;padding:2px}
-/* 칸 안 세 줄 — 1) 날짜 2) 정기전 회차 · 일정 막대 3) 인원수(오늘·앞으로) 또는 판수(지난 날).
+/* 모임이 잡힌 날 — 테두리 색으로만 알린다. 내가 참석으로 답했으면 초록, 아직 안 골랐으면 회색.
+   칸 안은 비워 둬야 날짜가 가운데를 잡는다. */
+.cell.meet{border-color:var(--muted);border-width:2px;padding:2px}
+.cell.meet.yes{border-color:var(--ok)}
+.cell.meet.no{border-color:var(--no)}
+/* 칸 안 세 줄 — 1) 날짜 2) 정기전 회차 · 일정 막대 3) 모임 참석 인원 또는 판수(지난 날).
    높이를 박아 둬야 칸마다 세로가 흔들리지 않는다. 막대는 .wbars 가 2번 자리 위에 얹는데,
    막대는 정기전 칸을 비켜 가므로 회차와 한 칸에서 겹치지 않는다.
    정기전 회차는 날짜와 같은 줄에 두면 날짜가 가운데로 못 가서 아랫줄로 내렸다. */
@@ -136,20 +122,20 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
   letter-spacing:-.03em;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .evchip.sm{font-size:.55rem;letter-spacing:-.06em}
 .gchip{font-size:.66rem;color:var(--muted);line-height:1.2;white-space:nowrap}
-/* 가능/불가 인원 — 좁은 칸에 두 줄로 넘치지 않게 "5 / 2" 한 줄로 */
-.r3 b{font-size:.74rem;font-weight:800;font-variant-numeric:tabular-nums}
-.r3 .vo{color:var(--ok)}
-.r3 .vx{color:var(--no)}
-.r3 .vsep{font-style:normal;font-size:.66rem;color:var(--muted)}
+/* 모임이 있는 날의 참석 인원 — 시간이 정해져 있으면 시각도 같이 (좁아서 "19시 3명" 정도) */
+.mtchip{font-size:.64rem;font-weight:800;color:var(--ok);line-height:1.2;white-space:nowrap;
+  max-width:100%;overflow:hidden;text-overflow:ellipsis}
 
-/* ══ 후보일 요약 ══ */
-.topday{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)}
-.topday:last-child{border-bottom:none}
-.topday .d{font-weight:700;min-width:6.5em}
-.topday .bar{flex:1;height:8px;background:var(--line);border-radius:999px;overflow:hidden;display:flex}
-.topday .bar i{display:block;height:100%}
-.topday .bar i.o{background:var(--ok)} .topday .bar i.x{background:var(--no)}
-.topday .n{font-size:.85rem;color:var(--muted);white-space:nowrap}
+/* ══ 다가오는 모임 요약 ══ */
+.upnext{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);
+  width:100%;background:none;border-left:none;border-right:none;border-top:none;
+  color:var(--text);font-family:inherit;font-size:1rem;text-align:left;cursor:pointer}
+.upnext:last-child{border-bottom:none}
+.upnext .d{font-weight:700;white-space:nowrap}
+.upnext .p{flex:1;min-width:0;color:var(--muted);font-size:.85rem;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.upnext .n{font-size:.85rem;font-weight:700;color:var(--ok);white-space:nowrap}
+.upnext .n.none{color:var(--muted)}
 
 /* ══ 날짜 상세 모달 ══ */
 .mask{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-end;
@@ -161,8 +147,28 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
 .sheethd{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
 .sheethd b{font-size:1.2rem}
 .closex{background:none;border:none;color:var(--muted);font-size:1.6rem;line-height:1;cursor:pointer;padding:0 4px}
-/* 인원수 점수판이 그대로 투표 버튼 — 누르면 선택, 다시 누르면 취소 */
-.tally{display:flex;gap:8px;margin-top:14px}
+/* ── 모임 카드 (날짜 상세 안) ── */
+/* 한 날짜에 모임이 여럿일 수 있다 (낮 당구 / 밤 뒤풀이). 그래서 카드를 쌓는다. */
+.mtcard{margin-top:14px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--bg)}
+.mtcard.mine{border-color:var(--accent-soft)}
+.mthd{display:flex;align-items:flex-start;gap:8px}
+.mtwhen{flex:1 1 auto;min-width:0;font-weight:800;font-size:1.02rem;line-height:1.35;word-break:keep-all}
+.mtwhen .pl{display:block;font-weight:600;font-size:.88rem;color:var(--muted);margin-top:2px}
+.mtnote{font-size:.86rem;color:var(--muted);margin-top:6px;word-break:break-all}
+.mtby{font-size:.75rem;color:var(--muted);margin-top:6px}
+/* 만든 사람만 보이는 삭제 단추 — 오른쪽 위 구석에 작게 */
+.mtdel{flex:0 0 auto;width:28px;height:28px;padding:0;background:none;border:1px solid var(--line);
+  border-radius:8px;color:var(--muted);font-size:1.05rem;line-height:1;cursor:pointer}
+.mtdel:active{color:var(--no);border-color:var(--no)}
+/* 참석자 이름. 불참은 숫자만 나온다 — 서버가 이름을 아예 안 준다. */
+.mtwho{margin-top:10px;font-size:.86rem;line-height:1.6;word-break:keep-all}
+.mtwho .lb{color:var(--muted);font-weight:700;margin-right:4px}
+.mtwho .yes{color:var(--ok);font-weight:600}
+.mtwho .none{color:var(--muted)}
+.mtwho .nocnt{color:var(--muted)}
+
+/* 참석/불참 — 누르면 선택, 다시 누르면 취소 */
+.tally{display:flex;gap:8px;margin-top:12px}
 .tally button{flex:1;text-align:center;border-radius:12px;padding:11px 6px;cursor:pointer;
   font-family:inherit;border:1.5px solid transparent;transition:transform .1s}
 .tally button:active{transform:scale(.97)}
@@ -175,32 +181,19 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
 .tally button.on span::after{content:' ✓'}
 .tally button:disabled{cursor:default;opacity:.55}
 .tally button:disabled:active{transform:none}
-/* ── 표에 붙는 부가 입력 (가능 시간 / 불가 사유) ── */
+/* ── 시트 안 입력 상자 (모임 만들기 / 일정 등록) ── */
 .vbox{margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--bg)}
 .vlab{font-size:.82rem;color:var(--muted);font-weight:700;margin-bottom:8px}
-/* 가능 시간 — 시(時)를 하나씩 고르던 휠 대신 세 토막으로 단순화. 한 번에 하나만 고른다. */
-.slots{display:flex;gap:5px}
-.slots button{flex:1 1 0;min-width:0;padding:9px 2px;border:1px solid var(--line);border-radius:10px;
-  background:var(--card);color:var(--muted);font-size:.86rem;font-weight:700;font-family:inherit;
-  cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;line-height:1.2}
-.slots button span{font-size:.66rem;font-weight:600;opacity:.75}
-.slots button.on{background:var(--ok);border-color:var(--ok);color:var(--card)}
-.slots button:active{transform:scale(.97)}
+/* 모임 만들기 폼 — 시간과 장소를 한 줄에 놓는다. 시간은 좁게, 장소는 남는 만큼. */
+.mtrow{display:flex;gap:6px;margin-bottom:8px}
+.mtrow .inp{flex:1 1 auto;min-width:0}
+.mtrow .inp.t{flex:0 0 7.5em}
+/* 모임을 만들 수 없는 상태(로그인 전·지난 날짜)에는 상자째 감춘다 — 아래 app.js 가 켠다 */
+.wide{width:100%;margin-top:2px}
 
-/* ── 익명 집계 (가능 시간대 막대 / 불가 사유) ── */
+/* ── 등록된 일정 목록 ── */
 .agg{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
 .agghd{font-size:.82rem;color:var(--muted);font-weight:700;margin-bottom:8px}
-/* 시간대별 가능 인원 — 가로축이 시간인 세로 막대 그래프 */
-/* 막대는 오전·오후·저녁 세 개뿐이라 가로 스크롤이 필요 없다 */
-.hchart{display:flex;align-items:flex-end;gap:8px;padding-bottom:2px}
-.hcol{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;gap:3px}
-.hcol .hn{font-size:.7rem;font-weight:800;color:var(--ok);line-height:1;font-variant-numeric:tabular-nums}
-.hcol .hb{width:100%;height:74px;display:flex;align-items:flex-end;
-  background:linear-gradient(var(--line),var(--line)) no-repeat bottom/100% 1px}
-.hcol .hb i{display:block;width:100%;background:var(--ok);border-radius:3px 3px 0 0;min-height:2px}
-.hcol .hh{font-size:.72rem;font-weight:600;color:var(--muted);line-height:1}
-.hcol.best .hn{color:var(--accent)}
-.hcol.best .hb i{background:var(--accent)}
 .rsn{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line)}
 .rsn:last-child{border-bottom:none}
 .rsn .t{font-size:.9rem;word-break:break-all}
@@ -333,36 +326,33 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
     </div>
     <div class="sub" id="dsInfo"></div>
 
-    <!-- 점수판이 곧 투표 버튼이다. 같은 쪽을 다시 누르면 취소된다 -->
-    <div class="tally">
-      <button type="button" id="dsO" class="o"><b id="dsCntO">0</b><span>⭕ 가능</span></button>
-      <button type="button" id="dsX" class="x"><b id="dsCntX">0</b><span>❌ 불가</span></button>
-    </div>
-    <div class="sub" id="dsPastNote" style="display:none; margin-top:8px;">지난 날짜라 투표할 수 없습니다.</div>
+    <!-- 이 날 잡힌 모임들. 카드마다 참석/불참 버튼과 참석자 이름이 붙는다 (app.js 가 그린다) -->
+    <div id="dsMeetups"></div>
 
-    <!-- O 를 고른 사람에게만 — 몇 시부터 몇 시까지 되는지. 점수판 제한시간과 같은 휠. -->
-    <div class="vbox" id="dsWhen" style="display:none;">
-      <div class="vlab">🕐 가능한 시간</div>
-      <div class="slots" id="dsSlots">
-        <button type="button" data-b="1">오전<span>6~12시</span></button>
-        <button type="button" data-b="2">오후<span>12~18시</span></button>
-        <button type="button" data-b="4">저녁<span>18~24시</span></button>
+    <!-- 모임 만들기 — 팀원 누구나. 날짜는 지금 연 날짜로 고정이고 시간·장소만 적는다. -->
+    <div class="vbox" id="dsMt" style="display:none;">
+      <div class="vlab">🎱 이 날 모임 만들기</div>
+      <div class="mtrow">
+        <input id="dsMtTime" class="inp t" type="time" step="300" aria-label="모임 시간">
+        <input id="dsMtPlace" class="inp" maxlength="30" placeholder="장소 (예: 메카당구장)">
       </div>
-      <div class="sub" style="margin-top:8px; font-size:.75rem;">되는 시간대를 여러 개 골라도 됩니다.</div>
+      <input id="dsMtNote" class="inp wide" maxlength="40" placeholder="메모 (선택)">
+      <button id="dsMtSave" class="sbtn wide">＋ 모임 만들고 알림 보내기</button>
+      <div class="sub" style="margin-top:8px; font-size:.75rem;">알림을 켜 둔 팀원에게 바로 알림이 갑니다. 시간을 비우면 '시간 미정'으로 올라갑니다.</div>
     </div>
 
-    <!-- 내 일정 — O/X 와 별개로 언제든 등록한다. 같은 날에 몇 개든 쌓을 수 있다.
+    <!-- 내 일정 — 모임과 별개인 개인 메모다. 같은 날에 몇 개든 쌓을 수 있다.
          날짜는 시작~끝이 아니라 하나씩 골라 담는다 (떨어진 날도 한 번에).
          등록한 일정은 아래 '등록된 일정' 목록에 나오고 거기서 지운다. -->
     <div class="vbox" id="dsPlan" style="display:none;">
       <div class="vlab">📌 일정 등록</div>
-      <input id="dsPlanName" class="inp" maxlength="20" placeholder="일정 이름 (예: 시험기간)">
+      <input id="dsPlanName" class="inp wide" maxlength="20" placeholder="일정 이름 (예: 시험기간)">
       <div id="dsPlanPick" class="pickbox" role="button" tabindex="0" aria-label="일정 날짜 고르기">📅 날짜 고르기</div>
-      <button id="dsPlanSave" class="sbtn" style="width:100%; margin-top:8px;">＋ 일정 등록</button>
-      <div class="sub" style="margin-top:8px; font-size:.75rem;">달력에 표시만 됩니다. 이어지는 날짜는 하나의 막대로 이어집니다. 못 오는 날은 ❌ 를 따로 눌러 주세요.</div>
+      <button id="dsPlanSave" class="sbtn wide">＋ 일정 등록</button>
+      <div class="sub" style="margin-top:8px; font-size:.75rem;">달력에 표시만 됩니다 (시험기간처럼 내가 바쁜 날). 이어지는 날짜는 하나의 막대로 이어집니다.</div>
     </div>
 
-    <!-- 모두에게 보이는 집계 — 이름 없이 인원수만 -->
+    <!-- 팀 전체에 등록된 일정 — 이름만, 누가 등록했는지는 나오지 않는다 -->
     <div id="dsAgg"></div>
 
     <div class="admbox" id="dsAdm" style="display:none;">

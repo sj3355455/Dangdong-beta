@@ -1547,11 +1547,11 @@ registerSW();
  */
 const VAPID_PUBLIC = 'BJO7jjlFWFhPntIIWsmk0NTUpW67axk-3ikmxIt9OoXZIHjVx88dFUqhL_0OxBMvpeVyLdsrn65A8VpOK0KUwF0';
 (function initPush(){
-  const row = $('#setPushRow'), btn = $('#setPush'), testBtn = $('#setPushTest');
-  if (!row || !btn || !testBtn) return;
+  const row = $('#setPushRow'), btn = $('#setPush');
+  if (!row || !btn) return;
   const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
   if (!location.pathname.includes('-beta') || !supported) return;   // 본 앱·미지원 브라우저는 조용히 숨긴다
-  row.style.display = ''; testBtn.style.display = '';
+  row.style.display = '';
 
   // VAPID 공개키(base64url) → subscribe() 가 요구하는 Uint8Array
   const b64ToU8 = s => {
@@ -1615,17 +1615,5 @@ const VAPID_PUBLIC = 'BJO7jjlFWFhPntIIWsmk0NTUpW67axk-3ikmxIt9OoXZIHjVx88dFUqhL_
       toast('알림 설정 실패: ' + (e && e.message || e));
       syncPush();
     } finally { btn.disabled = false; }
-  };
-
-  // 서버 없이 이 기기에서 바로 띄워 보는 확인용 — 알림이 보이는지/모양이 맞는지만 점검
-  testBtn.onclick = async () => {
-    if (Notification.permission !== 'granted' && await Notification.requestPermission() !== 'granted') {
-      toast('알림 권한이 없습니다'); return;
-    }
-    const reg = await navigator.serviceWorker.ready;
-    await reg.showNotification('당동 테스트', {
-      body: '알림이 잘 보이면 성공이에요 🎱',
-      icon: '../icons/icon-192.png', badge: '../icons/icon-192.png', tag: 'dangdong'
-    });
   };
 })();

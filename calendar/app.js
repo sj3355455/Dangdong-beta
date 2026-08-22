@@ -1,9 +1,11 @@
-// 당동 캘린더 — 정기전 일정 · 경기 판수 · 참여 익명 투표
+// 당동 캘린더 — 정기전 일정 · 경기 판수 · 모임 투표
 //
-// 익명성은 서버(RLS)가 지킨다. 이 파일은 남의 표를 조회하는 코드를 아예 갖고 있지 않다.
-//   · 내 표      : day_votes 에서 내 행만 읽고 쓴다 (RLS 가 남의 행을 막는다)
-//   · 인원수     : vote_counts() 함수가 서버에서 세어 O/X 숫자만 돌려준다
-// 자세한 정책은 저장소 루트의 sql/calendar/ 참고 (1~4 를 순서대로 실행).
+// 모임 투표: "8/25 5시 메카당구장" 처럼 모임 하나를 띄우고 참/불참을 받는다.
+//   · 만들면 알림을 켜 둔 팀원에게 푸시가 간다 (Supabase Edge Function notify-meetup).
+//   · 안드로이드는 알림에 붙은 [참석]/[불참] 버튼으로 바로 답한다. iOS 는 알림 버튼을
+//     지원하지 않아서, 누르면 캘린더가 그 모임을 연 채 뜨고 거기서 고른다.
+//   · 참석자는 이름까지 보이고 불참은 인원수만 나간다 — 서버 함수(meetups_in)가 정하는 범위다.
+// 자세한 정책은 저장소 루트의 sql/calendar/ 참고 (1,2,4,5 를 순서대로 실행).
 import { sbFetch } from '../record/supabase.js';
 import { registerSW, getTheme, applyTheme, LS_THEME, initTeamModal,
          shiftDay, openDayPicker } from '../record/common.js';
@@ -26,9 +28,9 @@ let cur = new Date(); cur.setDate(1); cur.setHours(0, 0, 0, 0);
 // 이번 달 데이터 — 모두 'YYYY-MM-DD' 를 키로 쓴다
 let events = {};    // 날짜 → { id, note } — 회차는 담지 않는다 (eventSeq 가 순서로 계산한다)
 let gameCnt = {};   // 날짜 → 경기 판수
-let counts = {};    // 날짜 → { o, x }
-let myVote = {};    // 날짜 → { c:'o'|'x', slots, from, to } — day_votes 의 내 행. slots 은 시간대 비트합
-                    // (from/to 는 slots 이전 기록을 환산할 때만 쓴다)
+let meetups = {};   // 날짜 → [모임...]  각 모임은 meetups_in 이 준 그대로
+                    // { id, meet_time, place, note, created_by, creator_name,
+                    //   yes_names[], yes_cnt, no_cnt, my_status:'yes'|'no'|null }
 let planSpans = []; // 이 달에 걸린 일정 막대 [{ name, from, to, cnt }] — 이름·기간·인원수만 (익명)
 let myPlans = [];   // 내가 등록한 일정 [{ id, name, start_date, end_date }] — 지우려면 이게 필요하다
 
@@ -45,14 +47,23 @@ const pad = n => String(n).padStart(2, '0');
 const ymd = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
 const todayStr = () => ymd(new Date());
 const DOW = ['일', '월', '화', '수', '목', '금', '토'];
-// 지난 날짜엔 투표할 수 없다 (이미 지나간 날의 참여 여부를 받을 이유가 없다).
+// 지난 날짜엔 모임을 만들 수 없다 (이미 지나간 날의 약속을 잡을 이유가 없다).
 // 키가 'YYYY-MM-DD' 라 문자열 비교로 충분하다.
 const isPast = key => key < todayStr();
 // 그 날 내가 등록해 둔 일정들
 const plansOn = key => myPlans.filter(p => p.start_date <= key && key <= p.end_date);
-// 그 날 내 선택 ('o' | 'x' | null). 일정은 개인 메모일 뿐 참석 여부가 아니라서 여기에 끼지 않는다
-// (서버 vote_counts 도 같은 기준으로 센다). myVote 는 시간까지 담은 객체라 한 겹 벗겨서 쓴다.
-const myChoice = key => (myVote[key] && myVote[key].c) || null;
+// 그 날의 모임들 (없으면 빈 배열)
+const meetsOn = key => meetups[key] || [];
+// '17:30:00' → '오후 5시 30분'. 시간이 없으면 null (시간 미정)
+function timeText(t){
+  if (!t) return null;
+  const [h, mi] = t.split(':').map(Number);
+  const ap = h < 12 ? '오전' : '오후';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${ap} ${h12}시${mi ? ' ' + mi + '분' : ''}`;
+}
+// 달력 칸처럼 좁은 자리용 — '17:30' / '17시'
+const timeShort = t => t ? (Number(t.slice(3, 5)) ? t.slice(0, 5) : Number(t.slice(0, 2)) + '시') : '';
 const label = key => {
   const [y, m, dd] = key.split('-').map(Number);
   const d = new Date(y, m - 1, dd);
@@ -115,8 +126,7 @@ function updateMonthCache() {
   monthCache[k] = {
     events: { ...events },
     gameCnt: { ...gameCnt },
-    counts: { ...counts },
-    myVote: { ...myVote },
+    meetups: { ...meetups },
     planSpans: [...planSpans],
     myPlans: [...myPlans],
     loadErr
@@ -124,14 +134,13 @@ function updateMonthCache() {
 }
 
 function clearMonth(){
-  events = {}; gameCnt = {}; counts = {}; myVote = {};
+  events = {}; gameCnt = {}; meetups = {};
   planSpans = []; myPlans = []; loadErr = '';
 }
 function applyCache(c){
   events = { ...c.events };
   gameCnt = { ...c.gameCnt };
-  counts = { ...c.counts };
-  myVote = { ...c.myVote };
+  meetups = { ...(c.meetups || {}) };
   planSpans = [...(c.planSpans || [])];
   myPlans = [...(c.myPlans || [])];
   loadErr = c.loadErr;
@@ -150,16 +159,12 @@ async function loadMonth(force = false){
   // 다음 달 1일 00:00 (경기 조회 상한 — played_at 은 timestamptz 라 날짜 비교가 아니라 범위로 자른다)
   const nextMonth = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
 
-  const [ev, games, cnt, mine, spans, plans] = await Promise.allSettled([
+  const [ev, games, mts, spans, plans] = await Promise.allSettled([
     sbFetch(`/rest/v1/club_events?select=id,event_date,note&team_id=eq.${currentTeam}`
           + `&event_date=gte.${d1}&event_date=lte.${d2}`),
     sbFetch(`/rest/v1/games?select=played_at&team_id=eq.${currentTeam}`
           + `&played_at=gte.${d1}T00:00:00&played_at=lt.${ymd(nextMonth)}T00:00:00`),
-    sbFetch('/rest/v1/rpc/vote_counts', { method: 'POST', body: JSON.stringify({ t: currentTeam, d1, d2 }) }),
-    auth && auth.uid
-      ? sbFetch(`/rest/v1/day_votes?select=vote_date,choice,slots,from_hour,to_hour&team_id=eq.${currentTeam}`
-              + `&vote_date=gte.${d1}&vote_date=lte.${d2}`)
-      : Promise.resolve([]),
+    sbFetch('/rest/v1/rpc/meetups_in', { method: 'POST', body: JSON.stringify({ t: currentTeam, d1, d2 }) }),
     sbFetch('/rest/v1/rpc/plan_spans', { method: 'POST', body: JSON.stringify({ t: currentTeam, d1, d2 }) }),
     auth && auth.uid
       ? sbFetch(`/rest/v1/day_plans?select=id,name,start_date,end_date&team_id=eq.${currentTeam}`
@@ -176,24 +181,12 @@ async function loadMonth(force = false){
       gameCnt[k] = (gameCnt[k] || 0) + 1;
     }
 
-  // 남의 표는 RLS 로 막혀 있어 이 집계 함수 말고는 인원수를 알 방법이 없다.
-  // 그래서 여기서 실패하면 '나만 보이고 남은 안 보이는' 상태가 된다 → 조용히 넘기지 않고 드러낸다.
-  // hours/reasons 는 vote_counts 를 새로 배포하기 전이면 안 온다 → 빈 배열로 두고 나머지는 그대로 굴린다
-  if (cnt.status === 'fulfilled' && Array.isArray(cnt.value))
-    for (const c of cnt.value) counts[c.vote_date] = {
-      o: c.o_cnt || 0, x: c.x_cnt || 0,
-      hours: Array.isArray(c.hours) ? c.hours : [],       // [[토막, 인원], ...] 0=오전 1=오후 2=저녁
-      reasons: Array.isArray(c.reasons) ? c.reasons : []  // [[사유, 인원], ...]
-    };
-  else
-    loadErr = describeCountErr(cnt.reason);
-
-  // day_votes 는 RLS 상 '내 행'만 돌아온다 — 그래서 이게 곧 내 표다
-  if (mine.status === 'fulfilled' && Array.isArray(mine.value)) {
-    for (const v of mine.value)
-      myVote[v.vote_date] = { c: v.choice, slots: v.slots, from: v.from_hour, to: v.to_hour };
-  } else if (!loadErr) {
-    loadErr = '내 투표를 불러오지 못했습니다: ' + errText(mine.reason);
+  // 모임과 참석 현황. 남의 표는 RLS 로 막혀 있어 이 함수 말고는 알 방법이 없다 —
+  // 여기서 실패하면 '모임이 하나도 없는 것처럼' 보이므로 조용히 넘기지 않고 드러낸다.
+  if (mts.status === 'fulfilled' && Array.isArray(mts.value)) {
+    for (const m of mts.value) (meetups[m.meet_date] || (meetups[m.meet_date] = [])).push(m);
+  } else {
+    loadErr = describeMeetupErr(mts.reason);
   }
 
   // 일정 기능은 나중에 붙었다. sql/calendar/4-plan-spans.sql 을 아직 안 돌린 서버라면 여기서 404 가 난다.
@@ -209,17 +202,17 @@ async function loadMonth(force = false){
 
 const errText = e => (e && (e.message || e.msg)) || '알 수 없는 오류';
 
-// 집계 실패는 원인이 갈린다. 사람이 바로 조치할 수 있게 구분해서 알려준다.
-function describeCountErr(e){
+// 모임을 못 읽는 원인은 갈린다. 사람이 바로 조치할 수 있게 구분해서 알려준다.
+function describeMeetupErr(e){
   const st = e && e.status;
   if (st === 404 || st === 400) {
-    return '투표 집계 함수(vote_counts)를 찾지 못했습니다. sql/calendar/3-vote-counts.sql 을 Supabase 에서 '
+    return '모임 조회 함수(meetups_in)를 찾지 못했습니다. sql/calendar/5-meetups.sql 을 Supabase 에서 '
          + '실행했는지, 실행했다면 스키마 캐시가 갱신됐는지 확인해 주세요. (' + errText(e) + ')';
   }
   if (st === 401 || st === 403) {
-    return '투표 집계를 볼 권한이 없습니다. 이 팀의 팀원인지 확인해 주세요. (' + errText(e) + ')';
+    return '모임을 볼 권한이 없습니다. 이 팀의 팀원인지 확인해 주세요. (' + errText(e) + ')';
   }
-  return '투표 인원수를 불러오지 못했습니다: ' + errText(e);
+  return '모임을 불러오지 못했습니다: ' + errText(e);
 }
 
 // ══ 화면 ══
@@ -233,14 +226,18 @@ function cellR2Html(key){
   return `<span class="evchip${sm}">${n ? '제' + n + '회' : '정기전'}</span>`;
 }
 
-// 칸 셋째 줄 — 지난 날은 '몇 판 쳤나', 오늘·앞으로는 '몇 명 되나'. 그 시점에 쓸모 있는 쪽만 남긴다.
-// 정기전이든 아니든 같은 규칙이다 — 회차는 둘째 줄이 맡으므로 여기서 자리를 다투지 않는다.
-// 붓 모드가 칸 하나만 다시 그릴 때도 이걸 쓴다.
+// 칸 셋째 줄 — 지난 날은 '몇 판 쳤나', 오늘·앞으로는 '모임 몇 시에 몇 명'.
+// 그 시점에 쓸모 있는 쪽만 남긴다. 회차는 둘째 줄이 맡으므로 여기서 자리를 다투지 않는다.
 function cellR3Html(key){
-  const g = gameCnt[key], c = counts[key] || { o: 0, x: 0 };
-  // 오늘 친 판수를 바로 띄우면 아직 유효한 O/X 와 자리를 다툰다 → 판수는 날짜가 지난 뒤부터.
+  const g = gameCnt[key];
+  // 오늘 친 판수를 바로 띄우면 아직 유효한 모임 정보와 자리를 다툰다 → 판수는 날짜가 지난 뒤부터.
   if (isPast(key)) return g ? `<span class="gchip">${g}판</span>` : '';
-  return (c.o || c.x) ? `<b class="vo">${c.o}</b><i class="vsep">/</i><b class="vx">${c.x}</b>` : '';
+  const ms = meetsOn(key);
+  if (!ms.length) return '';
+  // 모임이 둘 이상이면 시각 대신 개수를 보여 준다 — 좁은 칸에 둘 다 넣으면 아무것도 안 읽힌다
+  const head = ms.length > 1 ? `모임 ${ms.length}` : (timeShort(ms[0].meet_time) || '모임');
+  const yes = ms.reduce((n, m) => n + (m.yes_cnt || 0), 0);
+  return `<span class="mtchip">${esc(head)}${yes ? ' ' + yes + '명' : ''}</span>`;
 }
 
 function render(){
@@ -298,16 +295,21 @@ function render(){
       if (!key) { cells += '<div class="cell pad"></div>'; continue; }
       const d = Number(key.slice(8));
       const dow = new Date(y, m, d).getDay();
-      const ev = events[key], mv = myChoice(key);
-      // 지난 날의 참여 투표는 이미 의미가 없다 → 내 표·표시 테두리를 지우고
+      const ev = events[key], ms = meetsOn(key);
+      // 지난 날의 모임은 이미 끝난 일이다 → 표시 테두리를 지우고
       // 그날 실제로 있었던 일(정기전·판수)만 남긴다. 셋째 줄도 cellR3Html 이 같은 기준으로 가른다.
       const past = key < today;
       const cls = ['cell'];
       if (ev) cls.push('event');
       if (key === today) cls.push('today');
-      // 내 표는 테두리 색으로만 알린다 (초록=가능, 빨강=불가). 칸 안에 표시를 얹지 않는다.
-      if (mv && !past) cls.push(mv === 'o' ? 'vo' : 'vx');
-      if (past) cls.push('past');          // 투표 불가 — 눌러서 정기전·판수는 볼 수 있다
+      // 모임이 잡힌 날은 테두리로 알린다. 내가 답했으면 그 색(초록=참석, 빨강=불참)으로 바뀐다.
+      if (ms.length && !past) {
+        cls.push('meet');
+        // 여러 모임 중 하나라도 참석이면 참석 쪽을 보여 준다 — 그날 나가는 게 결론이므로
+        if (ms.some(x => x.my_status === 'yes')) cls.push('yes');
+        else if (ms.every(x => x.my_status === 'no')) cls.push('no');
+      }
+      if (past) cls.push('past');          // 지난 날 — 눌러서 정기전·판수는 볼 수 있다
       const dcls = dow === 0 ? ' sun' : dow === 6 ? ' sat' : '';
       // 첫째 줄 = 날짜만(가운데), 둘째 줄 = 정기전 회차 · 일정 막대, 셋째 줄 = 인원수 또는 판수.
       // 정기전 회차를 날짜 옆에 두면 날짜가 가운데를 못 잡아 아랫줄로 내렸다.
@@ -329,36 +331,34 @@ function render(){
 
   view.innerHTML = `
     ${loadErr ? `<div class="card" style="border-color:var(--no)">
-      <div style="font-weight:700; color:var(--no); margin-bottom:6px;">⚠️ 투표 현황을 불러오지 못했습니다</div>
+      <div style="font-weight:700; color:var(--no); margin-bottom:6px;">⚠️ 모임 현황을 불러오지 못했습니다</div>
       <div class="sub" style="color:var(--text)">${esc(loadErr)}</div>
-      <div class="sub" style="margin-top:8px">이 상태에서는 다른 부원의 표가 보이지 않습니다.</div>
+      <div class="sub" style="margin-top:8px">이 상태에서는 잡힌 모임이 보이지 않습니다.</div>
     </div>` : ''}
     <div class="monthbar">
       <button class="mbtn" id="prevM" aria-label="이전 달">‹</button>
       <b>${y}년 ${m + 1}월</b>
       <button class="mbtn" id="nextM" aria-label="다음 달">›</button>
     </div>
-    ${bulkBarHtml()}
+    ${barHtml()}
     <div class="dow">${DOW.map((w, i) => `<span class="${i === 0 ? 'sun' : i === 6 ? 'sat' : ''}">${w}</span>`).join('')}</div>
-    <div class="gridclip"><div class="grid${bulkMode ? ' paint' : ''}" id="grid">${weeks}</div></div>
-    ${bulkMode ? '' : `<div class="sub" style="text-align:center; margin:14px 0 20px;">
-      날짜를 눌러 참여 가능 여부를 남기세요. 누가 골랐는지는 공개되지 않습니다.
-    </div>`}
-    ${topDaysHtml()}
+    <div class="gridclip"><div class="grid" id="grid">${weeks}</div></div>
+    <div class="sub" style="text-align:center; margin:14px 0 20px;">
+      날짜를 눌러 모임을 만들거나 참석 여부를 고르세요.
+    </div>
+    ${upNextHtml()}
   `;
 
   $('#prevM').onclick = () => moveMonth(-1);
   $('#nextM').onclick = () => moveMonth(1);
-  bindBulkBar();
-  // 붓 모드에서는 칸을 눌러도 시트가 열리지 않는다 — 누른 자리가 곧 표다.
-  if (bulkMode) {
-    bindPaint($('#grid'));
-  } else {
-    document.querySelectorAll('#grid .cell[data-d]').forEach(el => {
-      el.onclick = () => { if (!swallowClick()) openDay(el.dataset.d); };
-    });
-    bindSwipe($('#grid'));
-  }
+  bindBar();
+  document.querySelectorAll('#grid .cell[data-d]').forEach(el => {
+    el.onclick = () => { if (!swallowClick()) openDay(el.dataset.d); };
+  });
+  document.querySelectorAll('.upnext[data-d]').forEach(el => {
+    el.onclick = () => openDay(el.dataset.d);
+  });
+  bindSwipe($('#grid'));
 }
 
 // ══ 좌우 드래그로 달 넘기기 ══
@@ -415,208 +415,41 @@ function bindSwipe(grid){
   grid.addEventListener('pointerleave', end);
 }
 
-// ══ 일괄 선택 (붓 모드) ══
-// 날짜 하나마다 시트를 열고 O/X 를 누르는 게 번거롭다. 표를 먼저 하나 골라 두고(붓)
-// 칸을 누르거나 쭉 쓸면 지나간 날이 전부 그 표가 된다. 한 번의 제스처가 한 번의 저장이다.
-let bulkMode = false;
-let brush = 'o';            // 'o' | 'x' | null(지우기 — 표를 없앤다)
-let bulkMsgText = '', bulkMsgKind = '';   // 안내문은 다시 그려도 남아야 해서 상태로 둔다
-
-function bulkBarHtml(){
-  // 붓 모드가 아닐 때만 팀장에게 '정기전 설정'을 함께 보인다 — 칠하는 중엔 자리를 다투지 않게.
-  if (!bulkMode) return `<div class="bulkbar" style="justify-content:flex-end">
-      ${isTeamLeader ? '<button type="button" class="bulkbtn" id="regOn">정기전 설정</button>' : ''}
-      <button type="button" class="bulkbtn" id="bulkOn">일괄 선택</button>
-    </div>`;
-  const on = b => brush === b ? ' on' : '';
+// ══ 달력 위 버튼 줄 ══
+function barHtml(){
   return `<div class="bulkbar">
-      <div class="brushes" id="brushes">
-        <button type="button" class="o${on('o')}" data-b="o" aria-pressed="${brush === 'o'}">⭕ 가능</button>
-        <button type="button" class="x${on('x')}" data-b="x" aria-pressed="${brush === 'x'}">❌ 불가</button>
-        <button type="button" class="c${on(null)}" data-b="" aria-pressed="${brush === null}">지우기</button>
-      </div>
-      <button type="button" class="bulkbtn done" id="bulkOff">완료</button>
-    </div>
-    <div class="sub bulkhint">고른 표시로 날짜를 누르거나 가로로 쓸어 보세요 · 달 이동은 ‹ › 로</div>
-    <div class="bulkmsg${bulkMsgKind ? ' ' + bulkMsgKind : ''}" id="bulkMsg">${esc(bulkMsgText)}</div>`;
+      ${isTeamLeader ? '<button type="button" class="bulkbtn" id="regOn">정기전 설정</button>' : ''}
+      <button type="button" class="bulkbtn go" id="mtNew">＋ 모임 만들기</button>
+    </div>`;
 }
 
-function bindBulkBar(){
+function bindBar(){
   const reg = $('#regOn');
   if (reg) reg.onclick = openRegModal;
-  const on = $('#bulkOn');
-  if (on) on.onclick = () => { bulkMode = true; bulkMsg(''); render(); };
-  const off = $('#bulkOff');
-  if (off) off.onclick = () => { bulkMode = false; bulkMsg(''); render(); };
-  const bs = $('#brushes');
-  if (bs) bs.querySelectorAll('button').forEach(b => {
-    b.onclick = () => {
-      brush = b.dataset.b || null;
-      bs.querySelectorAll('button').forEach(o => {
-        const sel = (o.dataset.b || null) === brush;
-        o.classList.toggle('on', sel);
-        o.setAttribute('aria-pressed', sel);
-      });
-      bulkMsg('');
-    };
-  });
+  const nw = $('#mtNew');
+  // 모임을 만들려면 날짜가 있어야 한다 → 오늘 날짜의 상세를 열고 만들기 상자로 데려간다
+  if (nw) nw.onclick = () => openDay(todayStr(), { focusNew: true });
 }
 
-function bulkMsg(t, kind){
-  bulkMsgText = t || ''; bulkMsgKind = kind || '';
-  const el = $('#bulkMsg');
-  if (el) { el.textContent = bulkMsgText; el.className = 'bulkmsg' + (bulkMsgKind ? ' ' + bulkMsgKind : ''); }
-}
-
-// 내 표를 화면 쪽에서만 먼저 바꾼다 (숫자·테두리). 서버 저장은 제스처가 끝난 뒤 한 번에.
-function applyLocal(key, next){
-  const prev = myChoice(key);
-  const c = counts[key] || (counts[key] = { o: 0, x: 0, hours: [], reasons: [] });
-  if (prev) c[prev] = Math.max(0, c[prev] - 1);
-  if (next) c[next] = (c[next] || 0) + 1;
-  // 캐시가 myVote 를 얕게 복사하므로 기존 객체를 고치지 않고 새 객체로 갈아 끼운다
-  if (next) myVote[key] = { c: next, slots: next === 'o' ? SLOT_ALL : null, from: null, to: null };
-  else delete myVote[key];
-}
-
-// 칸 하나만 다시 칠한다 — 칠하는 도중에 render() 를 부르면 손가락 밑의 격자가 통째로 갈려 나간다.
-function repaintCell(el, key){
-  const mv = myChoice(key), past = isPast(key);
-  el.classList.toggle('vo', mv === 'o' && !past);
-  el.classList.toggle('vx', mv === 'x' && !past);
-  const r3 = el.querySelector('.r3');
-  if (r3) r3.innerHTML = cellR3Html(key);
-}
-
-// 붓 모드의 칠하기. 달 넘기기 스와이프와 손이 겹치므로 이 모드에선 스와이프를 끄고 ‹ › 만 남긴다.
-//
-// 손가락 하나로 세 가지를 가려야 한다 — 톡 누르기(한 칸), 가로로 쓸기(여러 칸), 세로로 밀기(화면 스크롤).
-// 그래서 격자는 touch-action:pan-y 그대로 두고(세로는 브라우저에 맡긴다), 방향이 정해지기 전에는
-// 아무것도 칠하지 않는다. 누르자마자 칠해 버리면 스크롤하려던 손에 표가 찍힌다.
-function bindPaint(grid){
-  if (!grid) return;
-  let painting = false, decided = false, freehand = false;
-  let x0 = 0, y0 = 0, startEl = null;
-  let changed = null;        // key → 바꾸기 전의 내 표 (실패하면 이걸로 되돌린다)
-
-  const cellAt = (x, y) => {
-    const el = document.elementFromPoint(x, y);
-    return el && el.closest ? el.closest('#grid .cell[data-d]') : null;
-  };
-
-  const touch = el => {
-    if (!el || !changed) return;
-    const key = el.dataset.d;
-    // 한 제스처 안에서 이미 지나간 칸은 다시 건드리지 않는다 (손이 왔다 갔다 해도 결과가 같도록)
-    if (!key || changed.has(key)) return;
-    if (isPast(key)) return bulkMsg('지난 날짜에는 투표할 수 없습니다.', 'err');
-    if (myChoice(key) === brush) return;           // 이미 그 표면 쓸 일이 없다
-    changed.set(key, myVote[key] || null);
-    applyLocal(key, brush);
-    repaintCell(el, key);
-    vibTick();
-  };
-
-  const stop = () => { painting = false; decided = false; startEl = null; changed = null; };
-
-  grid.addEventListener('pointerdown', e => {
-    if (!e.isPrimary) return;
-    x0 = e.clientX; y0 = e.clientY;
-    startEl = cellAt(x0, y0);
-    painting = true; decided = false;
-    // 마우스는 세로로 끌어도 화면이 스크롤되지 않는다 → 방향을 가릴 필요 없이 자유롭게 칠한다
-    freehand = e.pointerType === 'mouse';
-    changed = new Map();
-    try { grid.setPointerCapture(e.pointerId); } catch(err){}
-  });
-
-  grid.addEventListener('pointermove', e => {
-    if (!painting || !e.isPrimary) return;
-    const dx = e.clientX - x0, dy = e.clientY - y0;
-    if (!decided) {
-      if (Math.abs(dx) < SWIPE_SLOP && Math.abs(dy) < SWIPE_SLOP) return;   // 아직 톡 누른 것일 수도
-      // 세로로 미는 손은 스크롤이다 — 표를 하나도 남기지 않고 물러난다
-      if (!freehand && Math.abs(dy) >= Math.abs(dx)) return stop();
-      decided = true;
-      touch(startEl);                 // 이제야 시작 칸부터 칠한다
-    }
-    touch(cellAt(e.clientX, e.clientY));
-  });
-
-  const end = e => {
-    if (!painting) return;
-    try { grid.releasePointerCapture(e.pointerId); } catch(err){}
-    if (!decided) touch(startEl);     // 움직임 없이 뗀 손 = 한 칸 톡 누르기
-    const m = changed;
-    stop();
-    if (m && m.size) flushBulk(m);
-  };
-  grid.addEventListener('pointerup', end);
-  // 세로 스크롤이 시작되면 브라우저가 포인터를 가져간다 — 그때까지 칠한 건 그대로 저장한다
-  grid.addEventListener('pointercancel', end);
-}
-
-// 제스처 한 번에 바뀐 날들을 한 번의 요청으로 저장한다 (표 세우기 / 지우기 각각 한 방).
-let bulkPending = 0;   // 아직 답을 기다리는 저장 수 — 마지막 하나가 끝날 때만 서버 값을 다시 읽는다
-                       // (앞선 저장의 응답으로 다시 읽으면, 그 사이 칠한 칸이 잠깐 원래대로 돌아가 보인다)
-
-async function flushBulk(changes){
-  const auth = getAuth();
-  if (!auth || !currentTeam) return;
-  const b = brush;                       // 저장하는 사이에 붓이 바뀌어도 안내문이 어긋나지 않게
-  const n = changes.size;
-  const keys = [...changes.keys()];
-
-  updateMonthCache();
-  bulkMsg(`${n}일 저장 중...`);
-  render();                              // 요약(모이기 좋은 날)까지 새 값으로 — 제스처는 이미 끝났다
-
-  bulkPending++;
-  let saved = false;
-  try {
-    const sets = keys.filter(k => myChoice(k));
-    const dels = keys.filter(k => !myChoice(k));
-    if (sets.length) await upsertVotes(sets.map(k => rowFor(k, myVote[k])));
-    if (dels.length) await sbFetch(`/rest/v1/day_votes?team_id=eq.${currentTeam}&user_id=eq.${auth.uid}`
-      + `&vote_date=in.(${dels.join(',')})`, { method: 'DELETE' });
-    saved = true;
-  } catch(e){
-    for (const [k, prev] of changes) {
-      applyLocal(k, prev && prev.c);
-      if (prev) myVote[k] = prev;        // 시간대(slots)까지 그대로 되살린다
-    }
-    updateMonthCache();
-    bulkMsg(`저장하지 못했습니다: ${errText(e)}`, 'err');
-    render();
-  } finally { bulkPending--; }
-
-  if (!saved) return;
-  bulkMsg(b ? `${n}일을 ${b === 'o' ? '가능으로' : '불가로'} 저장했습니다.` : `${n}일의 표를 지웠습니다.`, 'ok');
-  if (!bulkPending) await refresh(true); // 서버 집계(시간대별 인원)를 다시 읽어 맞춘다
-  else { updateMonthCache(); render(); }
-}
-
-// 이번 달에서 모이기 좋은 날 — 가능 인원이 많고 불가 인원이 적은 순.
-// 약속을 잡으려고 보는 목록이므로 이미 지난 날짜는 뺀다.
-function topDaysHtml(){
-  const rows = Object.keys(counts)
-    .map(k => ({ k, o: counts[k].o || 0, x: counts[k].x || 0 }))
-    .filter(r => r.o > 0 && !isPast(r.k))
-    .sort((a, b) => (b.o - b.x) - (a.o - a.x) || b.o - a.o || a.k.localeCompare(b.k))
+// 다가오는 모임 — 오늘 이후로 잡힌 것들. 달력을 훑지 않아도 다음 약속이 바로 보이게.
+function upNextHtml(){
+  const rows = Object.keys(meetups)
+    .filter(k => !isPast(k))
+    .sort()
+    .flatMap(k => meetsOn(k).map(m => ({ k, m })))
     .slice(0, 5);
   if (!rows.length) return '';
-  const max = Math.max(...rows.map(r => r.o + r.x));
   return `<div class="card">
-    <div style="font-weight:700; margin-bottom:6px;">🗓 모이기 좋은 날</div>
-    <div class="sub" style="margin-bottom:6px;">가능 인원이 많고 불가 인원이 적은 순</div>
-    ${rows.map(r => `<div class="topday">
-      <span class="d">${label(r.k)}</span>
-      <span class="bar">
-        <i class="o" style="width:${(r.o / max) * 100}%"></i>
-        <i class="x" style="width:${(r.x / max) * 100}%"></i>
-      </span>
-      <span class="n">O ${r.o} · X ${r.x}</span>
-    </div>`).join('')}
+    <div style="font-weight:700; margin-bottom:6px;">🎱 다가오는 모임</div>
+    ${rows.map(({ k, m }) => {
+      const when = timeText(m.meet_time);
+      const mine = m.my_status === 'yes' ? ' ✅' : m.my_status === 'no' ? ' ❌' : '';
+      return `<button type="button" class="upnext" data-d="${k}">
+        <span class="d">${label(k)}${when ? ' ' + esc(when) : ''}</span>
+        <span class="p">${esc(m.place || '')}</span>
+        <span class="n${m.yes_cnt ? '' : ' none'}">${m.yes_cnt || 0}명${mine}</span>
+      </button>`;
+    }).join('')}
   </div>`;
 }
 
@@ -728,9 +561,9 @@ async function refresh(force = false){
 // ══ 날짜 상세 ══
 let openKey = null;
 
-function openDay(key){
+function openDay(key, opts = {}){
   openKey = key;
-  const ev = events[key], g = gameCnt[key] || 0, c = counts[key] || { o: 0, x: 0 };
+  const ev = events[key], g = gameCnt[key] || 0;
   $('#dsTitle').textContent = label(key);
 
   const bits = [];
@@ -739,19 +572,22 @@ function openDay(key){
   if (g) bits.push(`🎱 ${g}판`);
   $('#dsInfo').innerHTML = bits.join(' · ') || '기록된 일정이 없습니다.';
 
-  // 점수판이 투표 버튼이므로 지난 날짜엔 숫자만 남기고 버튼을 잠근다.
-  const past = isPast(key);
-  $('#dsO').disabled = past;
-  $('#dsX').disabled = past;
-  $('#dsPastNote').style.display = past ? '' : 'none';
-  syncVoteUI();
-  $('#dsCntO').textContent = c.o;
-  $('#dsCntX').textContent = c.x;
+  renderMeetups(key);
   renderAgg(key);
 
-  // 일정은 O/X 와 별개다 — 표를 뭘 눌렀든, 안 눌렀든 언제나 등록할 수 있다.
-  // 시트를 열 때 한 번만 초기화한다(투표할 때마다 하면 적던 내용이 날아간다).
-  const canPlan = !past && !!getAuth();
+  const past = isPast(key);
+  const auth = getAuth();
+
+  // 모임 만들기 — 팀원 누구나. 지난 날짜에는 잡을 게 없으므로 닫는다.
+  // 시트를 열 때 한 번만 비운다(참석을 누를 때마다 비우면 적던 내용이 날아간다).
+  const canMeet = !past && !!auth && !!currentTeam;
+  $('#dsMt').style.display = canMeet ? '' : 'none';
+  if (canMeet) {
+    $('#dsMtTime').value = ''; $('#dsMtPlace').value = ''; $('#dsMtNote').value = '';
+  }
+
+  // 일정은 모임과 별개다 — 모임에 뭘 답했든 언제나 등록할 수 있다.
+  const canPlan = !past && !!auth;
   $('#dsPlan').style.display = canPlan ? '' : 'none';
   if (canPlan) {
     $('#dsPlanName').value = '';
@@ -768,23 +604,64 @@ function openDay(key){
   }
   msg('');
   $('#daySheet').classList.add('on');
+  // '＋ 모임 만들기' 로 들어왔으면 입력 칸까지 데려간다 — 시트를 연 이유가 그거니까
+  if (opts.focusNew && canMeet) {
+    $('#dsMt').scrollIntoView({ block: 'nearest' });
+    $('#dsMtPlace').focus();
+  }
 }
 
-function syncVoteUI(){
-  const mv = myChoice(openKey);
-  const o = $('#dsO'), x = $('#dsX');
-  o.classList.toggle('on', mv === 'o');
-  x.classList.toggle('on', mv === 'x');
-  o.setAttribute('aria-pressed', mv === 'o');
-  x.setAttribute('aria-pressed', mv === 'x');
+// ══ 모임 카드 ══
+// 참석자는 이름, 불참은 인원수. 이 범위는 서버(meetups_in)가 정하는 것이고
+// 여기서는 받은 것을 그대로 그릴 뿐이다 — 불참자 이름은 애초에 오지 않는다.
+function renderMeetups(key){
+  const box = $('#dsMeetups');
+  const ms = meetsOn(key);
+  const auth = getAuth();
+  const past = isPast(key);
 
-  // O 를 골랐으면 가능 시간 칸. 지난 날짜엔 닫는다. (일정 칸은 표와 무관하므로 openDay 가 맡는다)
-  const past = isPast(openKey);
-  const meta = myVote[openKey] || {};
-  $('#dsWhen').style.display = (mv === 'o' && !past) ? '' : 'none';
-  // 시간을 안 고른 사람은 '아무때나'. 기본값을 함부로 넣으면 아무 때나 되는 사람이
-  // 특정 시간대만 되는 것처럼 집계되므로, 비워 두는 쪽(=아무때나)이 기본이다.
-  if (mv === 'o') syncSlots(meta);
+  if (!ms.length) {
+    box.innerHTML = past ? '' :
+      `<div class="sub" style="margin-top:14px;">아직 잡힌 모임이 없습니다.</div>`;
+    return;
+  }
+
+  box.innerHTML = ms.map(m => {
+    const when = timeText(m.meet_time);
+    const names = (m.yes_names || []);
+    const mine = auth && m.created_by === auth.uid;
+    return `<div class="mtcard${mine ? ' mine' : ''}">
+      <div class="mthd">
+        <div class="mtwhen">${when ? esc(when) : '시간 미정'}
+          ${m.place ? `<span class="pl">📍 ${esc(m.place)}</span>` : ''}
+        </div>
+        ${mine ? `<button class="mtdel" data-id="${esc(m.id)}" aria-label="이 모임 지우기">&times;</button>` : ''}
+      </div>
+      ${m.note ? `<div class="mtnote">${esc(m.note)}</div>` : ''}
+      <div class="mtby">${esc(m.creator_name || '알 수 없음')}님이 만듦</div>
+      <div class="mtwho">
+        <span class="lb">참석</span>${names.length
+          ? `<span class="yes">${names.map(esc).join(', ')}</span>`
+          : `<span class="none">아직 없음</span>`}
+        ${m.no_cnt ? `<span class="nocnt"> · 불참 ${m.no_cnt}명</span>` : ''}
+      </div>
+      ${past ? '' : `<div class="tally">
+        <button type="button" class="o${m.my_status === 'yes' ? ' on' : ''}"
+                data-rsvp="yes" data-id="${esc(m.id)}" aria-pressed="${m.my_status === 'yes'}">
+          <b>${m.yes_cnt || 0}</b><span>✅ 참석</span></button>
+        <button type="button" class="x${m.my_status === 'no' ? ' on' : ''}"
+                data-rsvp="no" data-id="${esc(m.id)}" aria-pressed="${m.my_status === 'no'}">
+          <b>${m.no_cnt || 0}</b><span>❌ 불참</span></button>
+      </div>`}
+    </div>`;
+  }).join('');
+
+  box.querySelectorAll('[data-rsvp]').forEach(b => {
+    b.onclick = () => rsvp(b.dataset.id, b.dataset.rsvp);
+  });
+  box.querySelectorAll('.mtdel').forEach(b => {
+    b.onclick = () => delMeetup(b.dataset.id);
+  });
 }
 
 const shortRange = (a, b) => {
@@ -792,32 +669,7 @@ const shortRange = (a, b) => {
   return a === b ? f(a) : `${f(a)} ~ ${f(b)}`;
 };
 
-// ══ 가능한 시간 ══
-// 예전엔 시(時)를 하나씩 돌려 고르는 휠이었다. 정작 모이는 시간대는 몇 갈래뿐이라
-// 오전/오후/저녁 세 토막으로 줄이고, 여러 개를 함께 고를 수 있게 비트합으로 담는다.
-// 오전+저녁처럼 떨어진 조합도 있어서 from~to 한 쌍으로는 표현할 수 없기 때문이다.
-const SLOT_AM = 1, SLOT_PM = 2, SLOT_EV = 4, SLOT_ALL = 7;
-const SLOT_NAME = { 1:'오전', 2:'오후', 4:'저녁' };
-const slotText = n => [1,2,4].filter(b => n & b).map(b => SLOT_NAME[b]).join('·');
-// 예전 기록(slots 없음)은 from_hour~to_hour 와 겹치는 토막으로 환산한다. 서버 vote_counts 도
-// 똑같이 환산하므로 화면과 집계가 어긋나지 않는다. 시간을 안 적었던 표는 '무관' → 세 토막 전부.
-function slotsOf(meta){
-  if (meta.slots != null) return meta.slots;
-  if (meta.from == null) return SLOT_ALL;
-  return (meta.from < 12 && meta.to >  6 ? SLOT_AM : 0)
-       + (meta.from < 18 && meta.to > 12 ? SLOT_PM : 0)
-       + (meta.from < 24 && meta.to > 18 ? SLOT_EV : 0);
-}
 const vibTick = () => { try { navigator.vibrate && navigator.vibrate(6); } catch(e){} };
-
-function syncSlots(meta){
-  const n = slotsOf(meta);
-  $('#dsSlots').querySelectorAll('button').forEach(b => {
-    const on = !!(n & Number(b.dataset.b));
-    b.classList.toggle('on', on);
-    b.setAttribute('aria-pressed', on);
-  });
-}
 
 const RANGE_MAX = 90;   // 한 번에 등록할 수 있는 최대 일수 (실수로 몇 년치를 채우는 걸 막는다)
 
@@ -827,97 +679,125 @@ function msg(t, kind){
   el.className = 'msg' + (kind ? ' ' + kind : '');
 }
 
-// 투표 저장 — 같은 값을 다시 누르면 취소로 동작
-async function vote(choice){
+// ══ 참석 / 불참 ══
+// 같은 쪽을 다시 누르면 표를 거둔다. 화면부터 바꾸고 저장은 뒤따르게 해서
+// 누른 순간 반응이 오도록 한다 — 실패하면 되돌린다.
+async function rsvp(id, status){
   const auth = getAuth();
-  if (!auth || !currentTeam) return;
+  if (!auth || !currentTeam) return msg('로그인이 필요합니다.', 'err');
   const key = openKey;
-  if (isPast(key)) return;   // 지난 날짜는 투표 대상이 아니다 (UI도 가려져 있지만 이중으로 막는다)
-  const prevRow = myVote[key];
-  const prev = myChoice(key);
-  const next = (choice && choice !== prev) ? choice : null;
+  const m = meetsOn(key).find(x => x.id === id);
+  if (!m || isPast(key)) return;
 
-  // 가능(O)은 세 시간대 전부 켠 상태로 시작한다 — 안 되는 때만 꺼 주면 된다
-  const nextRow = next ? { c: next, slots: next === 'o' ? SLOT_ALL : null, from: null, to: null } : null;
+  const prev = m.my_status || null;
+  const next = status === prev ? null : status;
 
-  // 낙관적 반영: 숫자를 먼저 움직여 두고, 실패하면 되돌린다
-  const c = counts[key] || (counts[key] = { o: 0, x: 0, hours: [], reasons: [] });
-  if (prev) c[prev] = Math.max(0, c[prev] - 1);
-  if (next) c[next] = (c[next] || 0) + 1;
-  if (nextRow) myVote[key] = nextRow; else delete myVote[key];
-  syncVoteUI();
-  $('#dsCntO').textContent = c.o;
-  $('#dsCntX').textContent = c.x;
+  const bump = (s, d) => { if (s === 'yes') m.yes_cnt = Math.max(0, (m.yes_cnt || 0) + d);
+                           if (s === 'no')  m.no_cnt  = Math.max(0, (m.no_cnt  || 0) + d); };
+  const myName = auth.name || null;   // 로그인할 때 저장해 둔 표시 이름
+
+  // 낙관적 반영 — 숫자와 참석자 이름을 먼저 움직인다
+  const beforeNames = [...(m.yes_names || [])];
+  bump(prev, -1); bump(next, +1);
+  m.my_status = next;
+  if (myName) {
+    const others = beforeNames.filter(n => n !== myName);
+    m.yes_names = next === 'yes' ? [...others, myName].sort() : others;
+  }
+  vibTick();
+  renderMeetups(key);
   msg('저장 중...');
 
   try {
-    if (nextRow) {
-      await upsertVotes([rowFor(key, nextRow)]);
+    if (next) {
+      await sbFetch('/rest/v1/meetup_rsvps?on_conflict=meetup_id,user_id', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+        body: JSON.stringify({ meetup_id: id, user_id: auth.uid, status: next,
+                               updated_at: new Date().toISOString() })
+      });
     } else {
-      await sbFetch(`/rest/v1/day_votes?team_id=eq.${currentTeam}&vote_date=eq.${key}&user_id=eq.${auth.uid}`,
-        { method: 'DELETE' });
+      await sbFetch(`/rest/v1/meetup_rsvps?meetup_id=eq.${id}&user_id=eq.${auth.uid}`, { method: 'DELETE' });
     }
-    msg(next ? (next === 'o' ? '가능으로 저장했습니다.' : '불가로 저장했습니다.') : '표를 취소했습니다.', 'ok');
+    msg(next === 'yes' ? '참석으로 저장했습니다.' : next === 'no' ? '불참으로 저장했습니다.' : '표를 거뒀습니다.', 'ok');
     updateMonthCache();
     render();
-    await reloadAgg();
+    // 이름 목록은 내 것만 추측해서 넣은 상태다 — 서버 값으로 맞춘다
+    await refresh(true);
+    if ($('#daySheet').classList.contains('on')) renderMeetups(key);
   } catch(e){
-    // 되돌리기
-    if (next) c[next] = Math.max(0, c[next] - 1);
-    if (prev) c[prev] = (c[prev] || 0) + 1;
-    if (prevRow) myVote[key] = prevRow; else delete myVote[key];
-    syncVoteUI();
-    $('#dsCntO').textContent = c.o;
-    $('#dsCntX').textContent = c.x;
+    bump(next, -1); bump(prev, +1);
+    m.my_status = prev;
+    m.yes_names = beforeNames;
+    renderMeetups(key);
     updateMonthCache();
-    msg('저장하지 못했습니다: ' + (e.message || '알 수 없는 오류'), 'err');
+    msg('저장하지 못했습니다: ' + errText(e), 'err');
   }
 }
 
-// day_votes 한 행으로 만든다. 안 쓰는 열은 명시적으로 null 을 넣어야 예전 값이 남지 않는다.
-function rowFor(key, row){
+// ══ 모임 만들기 ══
+async function saveMeetup(){
   const auth = getAuth();
-  return {
-    team_id: currentTeam, vote_date: key, user_id: auth.uid, choice: row.c,
-    slots:     row.c === 'o' ? slotsOf(row) : null,
-    from_hour: null,          // 시간은 slots 로 옮겼다 — 이 두 열은 예전 기록을 읽을 때만 쓴다
-    to_hour:   null,
-    reason:    null,          // 일정은 day_plans 로 옮겼다 — 이 열은 더 쓰지 않는다
-    updated_at: new Date().toISOString()
-  };
+  const key = openKey;
+  if (!auth || !currentTeam) return msg('로그인이 필요합니다.', 'err');
+  if (isPast(key)) return msg('지난 날짜에는 모임을 만들 수 없습니다.', 'err');
+
+  const time  = $('#dsMtTime').value || null;        // '17:30' 또는 빈 값(시간 미정)
+  const place = $('#dsMtPlace').value.trim() || null;
+  const note  = $('#dsMtNote').value.trim() || null;
+  if (!place && !time) return msg('시간이나 장소 중 하나는 적어 주세요.', 'err');
+
+  msg('만드는 중...');
+  let created;
+  try {
+    const rows = await sbFetch('/rest/v1/meetups', {
+      method: 'POST',
+      headers: { Prefer: 'return=representation' },
+      body: JSON.stringify({ team_id: currentTeam, meet_date: key, meet_time: time,
+                             place, note, created_by: auth.uid })
+    });
+    if (!rows || !rows.length) throw new Error('저장은 됐지만 결과를 받지 못했습니다.');
+    created = rows[0];
+  } catch(e){
+    return msg('모임을 만들지 못했습니다: ' + errText(e), 'err');
+  }
+
+  await refresh(true);
+  openDay(key);
+
+  // 알림은 모임이 만들어진 뒤에 보낸다 — 알림이 실패해도 모임은 남아야 한다.
+  msg('알림 보내는 중...');
+  try {
+    const r = await notifyMeetup(created.id);
+    const n = (r && typeof r.sent === 'number') ? r.sent : null;
+    msg(n === null ? '모임을 만들고 알림을 보냈습니다.'
+      : n ? `모임을 만들고 ${n}명에게 알림을 보냈습니다.`
+          : '모임을 만들었습니다. (알림을 켠 팀원이 아직 없습니다)', 'ok');
+  } catch(e){
+    // 알림만 실패한 경우 — 모임 자체는 멀쩡하다는 걸 분명히 알린다
+    msg('모임은 만들었지만 알림을 보내지 못했습니다: ' + errText(e), 'err');
+  }
 }
 
-const upsertVotes = rows => sbFetch('/rest/v1/day_votes?on_conflict=team_id,vote_date,user_id', {
-  method: 'POST',
-  headers: { Prefer: 'resolution=merge-duplicates' },
-  body: JSON.stringify(rows)
+// Supabase Edge Function 이 실제 발송을 맡는다 (VAPID 개인키가 서버 쪽에만 있어야 하므로).
+const notifyMeetup = id => sbFetch('/functions/v1/notify-meetup', {
+  method: 'POST', body: JSON.stringify({ meetup_id: id })
 });
 
-// 가능 시간 토글 — 이미 O 를 고른 상태에서만 불린다. 여러 토막을 함께 켤 수 있다.
-async function saveHours(bit){
-  const key = openKey, row = myVote[key];
-  if (!row || row.c !== 'o' || isPast(key)) return;
-  const cur = slotsOf(row);
-  const next = cur ^ bit;
-  // 전부 끄면 "언제 되는지 모름"이 되어 O 를 누른 뜻이 사라진다 → 마지막 하나는 못 끄게 막는다
-  if (!next) return msg('최소 한 시간대는 골라야 합니다.', 'err');
-  vibTick();
-
-  // 캐시가 myVote 를 얕게 복사해 두므로 기존 객체를 고치면 캐시까지 같이 바뀐다 → 새 객체로 교체한다
-  const before = row;
-  myVote[key] = { ...row, slots: next, from: null, to: null };
-  syncSlots(myVote[key]);              // 통신을 기다리지 않고 버튼부터 켠다
-  msg('저장 중...');
+async function delMeetup(id){
+  const key = openKey;
+  const m = meetsOn(key).find(x => x.id === id);
+  if (!m) return;
+  const when = timeText(m.meet_time);
+  if (!confirm(`${label(key)}${when ? ' ' + when : ''} 모임을 지울까요?\n(참석 표도 함께 사라집니다)`)) return;
+  msg('삭제 중...');
   try {
-    await upsertVotes([rowFor(key, myVote[key])]);
-    msg(`${slotText(next)} 가능으로 저장했습니다.`, 'ok');
-    updateMonthCache();
-    await reloadAgg();
+    await sbFetch(`/rest/v1/meetups?id=eq.${id}`, { method: 'DELETE' });
+    await refresh(true);
+    openDay(key);
+    msg('모임을 지웠습니다.', 'ok');
   } catch(e){
-    myVote[key] = before;
-    updateMonthCache();
-    syncSlots(before);
-    msg('저장하지 못했습니다: ' + (e.message || '알 수 없는 오류'), 'err');
+    msg('지우지 못했습니다: ' + errText(e), 'err');
   }
 }
 
@@ -1009,35 +889,13 @@ async function delPlan(id){
   }
 }
 
-// 표를 바꾼 뒤 집계(시간대·사유)를 다시 읽어 시트에 반영한다
-async function reloadAgg(){
-  await refresh(true);
-  if ($('#daySheet').classList.contains('on')) renderAgg(openKey);
-}
-
-// 익명 집계 — 시간대별 가능 인원 막대 + 불가 사유별 인원. 이름은 서버에서부터 나오지 않는다.
+// 그 날 팀에 등록된 일정 목록. 이름만 나오고 누가 등록했는지는 서버에서부터 나오지 않는다.
 function renderAgg(key){
-  const c = counts[key] || {};
-  const hours = c.hours || [], reasons = c.reasons || [];
+  const reasons = planSpans
+    .filter(s => s.from <= key && key <= s.to)
+    .map(s => [s.name, s.cnt]);
   let html = '';
 
-  if (hours.length) {
-    // 서버가 [토막, 인원] 으로 준다 (0=오전 1=오후 2=저녁). 셋을 항상 다 그린다 —
-    // 0명인 토막을 빼면 "아무도 없는 시간"이 안 보여서 정작 알고 싶은 게 안 보인다.
-    const at = Object.fromEntries(hours);
-    const max = Math.max(...hours.map(h => h[1]));
-    const cols = ['오전','오후','저녁'].map((lb, i) => {
-      const n = at[i] || 0;
-      return `<div class="hcol${n && n === max ? ' best' : ''}">
-        <span class="hn">${n || ''}</span>
-        <span class="hb"><i style="height:${max ? (n / max) * 100 : 0}%"></i></span>
-        <span class="hh">${lb}</span>
-      </div>`;
-    }).join('');
-    html += `<div class="agg"><div class="agghd">🕐 시간대별 가능 인원</div>`
-      + `<div class="hchart">${cols}</div>`
-      + `</div>`;
-  }
   if (reasons.length) {
     // 서버가 주는 목록은 이름만 있고 누구 것인지는 없다(익명). 그래서 내 일정과 이름을 맞춰
     // 내가 등록한 줄에만 삭제 버튼을 붙인다. 인원수는 쓸모가 없어 빼고 그 자리를 버튼에 준다.
@@ -1327,8 +1185,7 @@ const setVoice = b => { try { localStorage.setItem(LS_VOICE, JSON.stringify(b));
 
 $('#dsClose').onclick = () => $('#daySheet').classList.remove('on');
 $('#daySheet').onclick = e => { if (e.target.id === 'daySheet') $('#daySheet').classList.remove('on'); };
-$('#dsO').onclick = () => vote('o');
-$('#dsX').onclick = () => vote('x');
+$('#dsMtSave').onclick = saveMeetup;
 $('#dsPlanSave').onclick = savePlan;
 $('#dsPlanPick').onclick = openPlanPicker;
 $('#dsPlanPick').onkeydown = e => {
@@ -1343,20 +1200,48 @@ $('#btnLogout').onclick = () => {
   location.href = '../score/';
 };
 
-// 다른 부원이 투표한 건 서버에만 쌓이므로, 화면으로 돌아올 때 다시 읽어 온다.
-// (앱을 켜 둔 채로도 최신 인원수를 보게 된다. 폴링은 하지 않는다)
+// 다른 부원이 답한 건 서버에만 쌓이므로, 화면으로 돌아올 때 다시 읽어 온다.
+// (앱을 켜 둔 채로도 최신 참석 인원을 보게 된다. 폴링은 하지 않는다)
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && currentTeam) refresh(true);
 });
 
+// ══ 알림에서 들어온 경우 ══
+// 알림 버튼(참석/불참)은 안드로이드에만 있다. iOS 는 알림을 누르면 여기로 오는데,
+// 그때 ?meetup=<id> 를 달고 온다 → 그 모임이 있는 날짜의 상세를 열어 준다.
+async function openFromLink(){
+  const id = new URLSearchParams(location.search).get('meetup');
+  if (!id) return;
+  // 주소창에 남겨 두면 새로고침마다 시트가 다시 열린다 → 한 번 쓰고 지운다
+  try { history.replaceState(null, '', location.pathname); } catch(e){}
+  try {
+    const rows = await sbFetch('/rest/v1/rpc/meetup_one', {
+      method: 'POST', body: JSON.stringify({ m: id })
+    });
+    const m = Array.isArray(rows) ? rows[0] : null;
+    if (!m) return;
+    // 다른 팀·다른 달의 모임일 수 있다 — 그 팀과 그 달로 옮겨 놓고 연다
+    if (m.team_id && m.team_id !== currentTeam) {
+      currentTeam = m.team_id; tSet(currentTeam);
+      const me = myTeams.find(t => t.id === currentTeam);
+      isTeamLeader = !!(me && me.is_admin);
+      renderTeamBar();
+    }
+    const [y, mo] = m.meet_date.split('-').map(Number);
+    cur = new Date(y, mo - 1, 1);
+    await refresh(true);
+    openDay(m.meet_date);
+  } catch(e){ /* 못 찾으면 그냥 이번 달을 보여 준다 */ }
+}
+
 // ══ 시작 ══
 applyTheme(getTheme());
 registerSW();
-$('#dsSlots').querySelectorAll('button').forEach(b => { b.onclick = () => saveHours(Number(b.dataset.b)); });
 (async () => {
   $('#view').innerHTML = '<div class="card"><div class="empty">불러오는 중...</div></div>';
   if (getAuth()) $('#btnLogout').style.display = '';
   await loadTeams();
   renderTeamBar();
   await refresh();
+  await openFromLink();
 })();
