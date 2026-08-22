@@ -780,9 +780,23 @@ async function saveMeetup(){
 }
 
 // Supabase Edge Function 이 실제 발송을 맡는다 (VAPID 개인키가 서버 쪽에만 있어야 하므로).
-const notifyMeetup = id => sbFetch('/functions/v1/notify-meetup', {
-  method: 'POST', body: JSON.stringify({ meetup_id: id })
-});
+//
+// 함수가 배포돼 있지 않으면 게이트웨이가 CORS 헤더 없이 404 를 돌려준다. 그러면 브라우저가
+// 응답을 읽지 못하고 그냥 'Failed to fetch' 만 던져서 원인을 알 수 없다 —
+// 그 경우를 알아볼 수 있는 문구로 바꿔 준다.
+async function notifyMeetup(id){
+  try {
+    return await sbFetch('/functions/v1/notify-meetup', {
+      method: 'POST', body: JSON.stringify({ meetup_id: id })
+    });
+  } catch(e){
+    if (e instanceof TypeError) {
+      throw new Error('알림 서버(notify-meetup)에 닿지 못했습니다. '
+        + 'Supabase → Edge Functions 에 그 이름으로 배포돼 있는지 확인해 주세요.');
+    }
+    throw e;
+  }
+}
 
 async function delMeetup(id){
   const key = openKey;
