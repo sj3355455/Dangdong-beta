@@ -29,7 +29,9 @@ alter table public.push_subscriptions_beta enable row level security;
 -- ★ 중요 — RLS 정책만으로는 부족하다.
 -- 정책은 "어느 행을 만질 수 있나"를 정하는 것이고, 그 전에 "이 표를 만질 수 있나"라는
 -- 테이블 권한(GRANT)이 따로 있어야 한다. 이게 없으면 앱에서 permission denied for table 이 뜬다.
-grant select, insert, update, delete on public.push_subscriptions_beta to anon, authenticated;
+-- service_role 도 함께 — 알림을 보내는 Edge Function 이 이 표를 읽는다.
+-- RLS 를 통과하는 키라도 테이블 권한은 따로 있어야 한다.
+grant select, insert, update, delete on public.push_subscriptions_beta to anon, authenticated, service_role;
 
 -- 앱에서 알림을 켜고 끄는 동작(추가·갱신·삭제)은 로그인 없이도 되게 열어 둔다.
 -- 베타 테스트용이라 이렇게 두는 것이고, 실서비스로 옮길 때는 authenticated 로 좁히고

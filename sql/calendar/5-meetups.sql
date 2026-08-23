@@ -58,6 +58,9 @@ create table if not exists public.meetup_rsvps (
 
 grant select, insert, update, delete on public.meetups      to authenticated;
 grant select, insert, update, delete on public.meetup_rsvps to authenticated;
+-- 알림을 보내는 Edge Function 이 모임 내용을 읽는다 (RLS 통과 키라도 표 권한은 따로 필요)
+grant select on public.meetups      to service_role;
+grant select on public.meetup_rsvps to service_role;
 
 alter table public.meetups      enable row level security;
 alter table public.meetup_rsvps enable row level security;
