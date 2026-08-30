@@ -258,6 +258,9 @@ function render(){
     return;
   }
 
+  // 팀을 옮기거나 팀장에서 내려오면 직접 수정 모드는 저절로 풀린다 (남의 팀 달력을 고치지 않도록)
+  if (regEditing && !isTeamLeader) { regEditing = false; regEditMsg = ''; regEditBad = false; }
+
   const y = cur.getFullYear(), m = cur.getMonth();
   const first = new Date(y, m, 1);
   const daysInMonth = new Date(y, m + 1, 0).getDate();
@@ -342,18 +345,22 @@ function render(){
     </div>
     ${barHtml()}
     <div class="dow">${DOW.map((w, i) => `<span class="${i === 0 ? 'sun' : i === 6 ? 'sat' : ''}">${w}</span>`).join('')}</div>
-    <div class="gridclip"><div class="grid" id="grid">${weeks}</div></div>
+    <div class="gridclip"><div class="grid${regEditing ? ' editing' : ''}" id="grid">${weeks}</div></div>
     <div class="sub" style="text-align:center; margin:14px 0 20px;">
-      날짜를 눌러 모임을 만들거나 참석 여부를 고르세요.
+      ${regEditing ? '수정을 마치면 위의 완료를 누르세요.' : '날짜를 눌러 모임을 만들거나 참석 여부를 고르세요.'}
     </div>
-    ${upNextHtml()}
+    ${regEditing ? '' : upNextHtml()}
   `;
 
   $('#prevM').onclick = () => moveMonth(-1);
   $('#nextM').onclick = () => moveMonth(1);
   bindBar();
   document.querySelectorAll('#grid .cell[data-d]').forEach(el => {
-    el.onclick = () => { if (!swallowClick()) openDay(el.dataset.d); };
+    // 직접 수정 중에는 같은 칸이 날짜 상세 대신 정기전 스위치로 쓰인다
+    el.onclick = () => {
+      if (swallowClick()) return;
+      if (regEditing) regToggleDay(el.dataset.d); else openDay(el.dataset.d);
+    };
   });
   document.querySelectorAll('.upnext[data-d]').forEach(el => {
     el.onclick = () => openDay(el.dataset.d);
@@ -416,7 +423,13 @@ function bindSwipe(grid){
 }
 
 // ══ 달력 위 버튼 줄 ══
+// 직접 수정 중에는 평소 버튼 대신 안내 띠가 그 자리에 들어간다 — 달력은 그대로 두고
+// 지금이 평소와 다른 상태라는 것만 계속 알린다.
 function barHtml(){
+  if (regEditing) return `<div class="editbar${regEditBad ? ' bad' : ''}" id="regEditBar">
+      <span class="t" id="regEditNote">${esc(regEditMsg || REG_EDIT_HELP)}</span>
+      <button type="button" id="regEditDone">완료</button>
+    </div>`;
   return `<div class="bulkbar">
       ${isTeamLeader ? '<button type="button" class="bulkbtn" id="regOn">정기전 설정</button>' : ''}
       <button type="button" class="bulkbtn go" id="mtNew">＋ 모임 만들기</button>
@@ -426,6 +439,8 @@ function barHtml(){
 function bindBar(){
   const reg = $('#regOn');
   if (reg) reg.onclick = openRegModal;
+  const done = $('#regEditDone');
+  if (done) done.onclick = regEditStop;
   const nw = $('#mtNew');
   // 모임을 만들려면 날짜가 있어야 한다 → 오늘 날짜의 상세를 열고 만들기 상자로 데려간다
   if (nw) nw.onclick = () => openDay(todayStr(), { focusNew: true });
@@ -1126,17 +1141,16 @@ async function delEvent(){
 
 // ══ 정기전 자동 편성 (팀장) ══
 // 날짜를 하나씩 열어 회차를 적는 대신, 언제 모일지만 정하면 그에 맞는 날을 전부 뽑아
-// 회차를 차례로 매겨 넣는다. 시작 회차는 첫 날짜 이전의 마지막 회차에서 이어 붙인다.
-// 방식은 세 가지 — 일별(달력에서 직접 선택) · 매주(요일 선택) · 매월(날짜 선택).
+// 회차를 차례로 매겨 넣는다. 시작은 늘 오늘 — 지난 날짜를 새로 짤 일은 없다.
+// 방식은 두 가지 — 매주(요일 선택) · 매월(날짜 선택). 규칙에 안 맞는 날은
+// 아래 '직접 수정' 모드에서 달력을 눌러 하나씩 켜고 끈다.
 const LS_REG = 'dangRegPlan';
 const REG_MAX = 400;                     // 한 번에 만들 수 있는 최대 회차 수 (실수로 몇 년치를 채우는 걸 막는다)
 
-let regMode  = 'week';    // 'day' | 'week' | 'month'
+let regMode  = 'week';    // 'week' | 'month'
 let regDows  = [];        // 매주 — 고른 요일 (0=일 … 6=토). 고른 개수가 곧 주 몇 회인지를 정한다 — 일곱 개를 다 골라도 된다
 let regDoms  = [];        // 매월 — 고른 날짜 (1–31). 그 달에 없는 날은 건너뛴다
-let regDays  = [];        // 일별 — 달력에서 직접 고른 날짜 키(YYYY-MM-DD)
-let regMonths = 3;        // 적용 기간(개월) — 매주·매월에서만 쓴다
-let regCalYM = null;      // 일별 미니 달력이 보고 있는 달 {y, m} (m은 0부터)
+let regMonths = 3;        // 적용 기간(개월) — 오늘부터 이만큼
 
 const regCfgKey = () => LS_REG + ':' + (currentTeam || 'none');
 function regSaveCfg(){
@@ -1155,13 +1169,11 @@ function addMonths(key, n){
   return ymd(new Date(y, m - 1 + n, Math.min(d, last)));
 }
 
-// 지금 설정으로 잡히는 정기전 날짜들 (오름차순)
+// 지금 설정으로 잡히는 정기전 날짜들 (오름차순). 오늘부터 적용 기간 끝까지 하루씩 훑는다.
 function regDates(){
-  if (regMode === 'day') return regDays.slice().sort().slice(0, REG_MAX);
-  const from = $('#regFrom').value;
-  if (!from) return [];
   const picked = regMode === 'week' ? regDows : regDoms;
   if (!picked.length) return [];
+  const from = todayStr();
   const end = addMonths(from, regMonths);
   const [y, m, d] = from.split('-').map(Number);
   const out = [];
@@ -1182,9 +1194,8 @@ function regMsg(t, kind){
 // 미리보기 — 몇 회가 언제부터 언제까지 잡히는지 등록 전에 보여 준다.
 function regSyncPrev(){
   const spec = {
-    day:   ['#regDayCnt', regDays.length, `${regDays.length}일 선택`, '달력에서 <b>날짜</b>를 골라 주세요.'],
-    week:  ['#regDowCnt', regDows.length, `주 ${regDows.length}회`,   '<b>요일</b>을 하나 이상 골라 주세요.'],
-    month: ['#regDomCnt', regDoms.length, `월 ${regDoms.length}회`,   '<b>날짜</b>를 하나 이상 골라 주세요.']
+    week:  ['#regDowCnt', regDows.length, `주 ${regDows.length}회`, '<b>요일</b>을 하나 이상 골라 주세요.'],
+    month: ['#regDomCnt', regDoms.length, `월 ${regDoms.length}회`, '<b>날짜</b>를 하나 이상 골라 주세요.']
   }[regMode];
   const cnt = $(spec[0]);
   cnt.textContent = spec[1] ? spec[2] : '';
@@ -1219,34 +1230,12 @@ function regSyncDoms(){
   });
 }
 
-// 일별 미니 달력 — 보고 있는 달만 그린다. 고른 날은 다른 달로 넘겨도 regDays 에 그대로 남는다.
-function regRenderCal(){
-  if (!regCalYM) regCalYM = { y: new Date().getFullYear(), m: new Date().getMonth() };
-  const { y, m } = regCalYM;
-  $('#regCalTitle').textContent = `${y}년 ${m + 1}월`;
-  const first = new Date(y, m, 1).getDay();
-  const last  = new Date(y, m + 1, 0).getDate();
-  let html = '';
-  for (let i = 0; i < first; i++) html += '<button type="button" class="pad" tabindex="-1"></button>';
-  for (let d = 1; d <= last; d++) {
-    const key = ymd(new Date(y, m, d));
-    const w   = new Date(y, m, d).getDay();
-    const on  = regDays.includes(key);
-    const cls = ((w === 0 ? 'sun ' : w === 6 ? 'sat ' : '') + (on ? 'on' : '')).trim();
-    html += `<button type="button" class="${cls}" data-k="${key}" aria-pressed="${on}">${d}</button>`;
-  }
-  $('#regCalGrid').innerHTML = html;
-}
-
-// 방식마다 보여 줄 칸이 다르다. 일별은 날짜를 직접 골랐으므로 시작 날짜·적용 기간을 묻지 않는다.
+// 방식마다 보여 줄 칸이 다르다 — 매주는 요일 칩, 매월은 1~31 칩.
 function regSyncMode(){
   $('#regMode').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.k === regMode));
   $('#regSpan').querySelectorAll('button').forEach(b => b.classList.toggle('on', Number(b.dataset.m) === regMonths));
-  $('#regDayBox').style.display   = regMode === 'day'   ? '' : 'none';
-  $('#regWeekBox').style.display  = regMode === 'week'  ? '' : 'none';
-  $('#regMonBox').style.display   = regMode === 'month' ? '' : 'none';
-  $('#regRangeBox').style.display = regMode === 'day'   ? 'none' : '';
-  if (regMode === 'day')   regRenderCal();
+  $('#regWeekBox').style.display = regMode === 'week'  ? '' : 'none';
+  $('#regMonBox').style.display  = regMode === 'month' ? '' : 'none';
   if (regMode === 'week')  regSyncDows();
   if (regMode === 'month') regSyncDoms();
   regSyncPrev();
@@ -1255,13 +1244,10 @@ function regSyncMode(){
 async function openRegModal(){
   if (!isTeamLeader || !currentTeam) return;
   const cfg = regLoadCfg();
-  regMode   = cfg && ['day','week','month'].includes(cfg.mode) ? cfg.mode : 'week';
+  regMode   = cfg && cfg.mode === 'month' ? 'month' : 'week';
   regDows   = cfg && Array.isArray(cfg.dows) ? cfg.dows.filter(w => w >= 0 && w <= 6) : [];
   regDoms   = cfg && Array.isArray(cfg.doms) ? cfg.doms.filter(d => d >= 1 && d <= 31) : [];
   regMonths = cfg && cfg.months ? cfg.months : 3;
-  regDays   = [];                          // 직접 고른 날짜는 다음에 그대로 쓸 일이 없다 — 매번 빈 채로 연다
-  regCalYM  = { y: new Date().getFullYear(), m: new Date().getMonth() };
-  $('#regFrom').value = todayStr();
   regMsg('');
   regSyncMode();
   $('#regModal').classList.add('on');
@@ -1271,16 +1257,14 @@ async function openRegModal(){
 
 async function regApply(){
   if (!isTeamLeader || !currentTeam) return regMsg('팀장만 정기전을 등록할 수 있습니다.', 'err');
-  if (regMode === 'day'   && !regDays.length) return regMsg('달력에서 날짜를 골라 주세요.', 'err');
   if (regMode === 'week'  && !regDows.length) return regMsg('요일을 하나 이상 골라 주세요.', 'err');
   if (regMode === 'month' && !regDoms.length) return regMsg('날짜를 하나 이상 골라 주세요.', 'err');
-  if (regMode !== 'day'   && !$('#regFrom').value) return regMsg('시작 날짜를 골라 주세요.', 'err');
 
   const dates = regDates();
   if (!dates.length) return regMsg('잡히는 날짜가 없습니다.', 'err');
-  // 비우고 다시 넣을 범위 — 일별은 고른 날짜의 처음~끝, 나머지는 시작 날짜~적용 기간 끝
-  const from = regMode === 'day' ? dates[0] : $('#regFrom').value;
-  const to   = regMode === 'day' ? dates[dates.length - 1] : addMonths(from, regMonths);
+  // 비우고 다시 넣을 범위 — 오늘부터 적용 기간 끝까지. 지난 정기전은 손대지 않는다.
+  const from = todayStr();
+  const to   = addMonths(from, regMonths);
   // 첫 날짜 앞에 이미 있는 정기전 수가 시작 회차를 정한다 (안내용 — 저장하는 값은 아니다)
   const start = countBefore(from) + 1;
   const endNo = start + dates.length - 1;
@@ -1332,7 +1316,7 @@ async function regApply(){
     regSyncMode(); regMsg('');
   });
 
-  // 요일 · 매월 날짜 · 달력 — 세 곳 모두 누를 때마다 켜고 끄는 토글이고, 개수 제한이 없다
+  // 요일 · 매월 날짜 — 두 곳 모두 누를 때마다 켜고 끄는 토글이고, 개수 제한이 없다
   const toggle = (arr, v) => arr.includes(v) ? arr.filter(x => x !== v) : arr.concat(v);
 
   $('#regDow').querySelectorAll('button').forEach(b => b.onclick = () => {
@@ -1345,23 +1329,70 @@ async function regApply(){
     regSyncDoms(); regSyncPrev(); regMsg('');
   });
 
-  // 달력 칸은 달을 넘길 때마다 새로 그려지므로 개별 버튼 대신 판 하나에 걸어 둔다
-  $('#regCalGrid').onclick = e => {
-    const b = e.target.closest('button[data-k]'); if (!b) return;
-    regDays = toggle(regDays, b.dataset.k);
-    regRenderCal(); regSyncPrev(); regMsg('');
-  };
-  const stepCal = n => () => {
-    const d = new Date(regCalYM.y, regCalYM.m + n, 1);   // 12월 다음은 Date 가 알아서 이듬해 1월로 넘겨 준다
-    regCalYM = { y: d.getFullYear(), m: d.getMonth() };
-    regRenderCal();
-  };
-  $('#regCalPrev').onclick = stepCal(-1);
-  $('#regCalNext').onclick = stepCal(1);
-
-  $('#regFrom').onchange = () => { regSyncPrev(); regMsg(''); };
   $('#regApply').onclick = regApply;
+  // 창을 닫고 달력을 그대로 둔 채 수정 모드로 들어간다 — 달력이 곧 편집 화면이다
+  $('#regEditGo').onclick = () => { close(); regEditStart(); };
 })();
+
+// ══ 직접 수정 (팀장) ══
+// 규칙으로 안 잡히는 날을 위한 손질 모드. 달력을 그대로 두고, 칸을 누르면 그 날 정기전이
+// 켜지고 이미 정기전인 날을 누르면 꺼진다. 회차는 늘 날짜 순서가 정하므로 손댈 것이 없다.
+const REG_EDIT_HELP = '날짜를 눌러 정기전을 지정하고, 이미 정기전인 날은 다시 눌러 해제하세요.';
+
+let regEditing = false;   // 지금 수정 모드인가
+let regEditBusy = false;  // 요청 하나가 끝나기 전엔 다음 칸을 받지 않는다 (연타로 회차가 꼬이지 않게)
+let regEditMsg  = '';     // 안내 띠에 띄울 최근 결과
+let regEditBad  = false;  // 그 결과가 실패인가
+
+function regEditStart(){
+  if (!isTeamLeader || !currentTeam) return;
+  regEditing = true; regEditMsg = ''; regEditBad = false;
+  render();
+  scrollTo({ top: 0, behavior: 'smooth' });   // 안내 띠를 눈에 넣고 시작한다
+}
+
+function regEditStop(){
+  regEditing = false; regEditMsg = ''; regEditBad = false;
+  render();
+}
+
+// 안내 띠는 render 가 새로 그리므로 값부터 남기고, 지금 떠 있는 띠는 그 자리에서 고친다
+function regEditSay(t, bad){
+  regEditMsg = t; regEditBad = !!bad;
+  const bar = $('#regEditBar'), note = $('#regEditNote');
+  if (bar) bar.classList.toggle('bad', regEditBad);
+  if (note) note.textContent = t || REG_EDIT_HELP;
+}
+
+async function regToggleDay(key){
+  if (!isTeamLeader || !currentTeam) return;
+  if (regEditBusy) return;
+  regEditBusy = true;
+  const was = !!events[key];
+  regEditSay(`${label(key)} ${was ? '해제' : '지정'} 중...`);
+  try {
+    if (was) {
+      await sbFetch(`/rest/v1/club_events?team_id=eq.${currentTeam}&event_date=eq.${key}`, { method: 'DELETE' });
+    } else {
+      // 회차는 넣지 않는다 — 날짜 순서가 곧 회차다
+      const rows = await sbFetch('/rest/v1/club_events?on_conflict=team_id,event_date', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+        body: JSON.stringify({ team_id: currentTeam, event_date: key, round_no: null, note: null })
+      });
+      if (!rows || !rows.length) throw new Error('권한이 없습니다. 팀장만 등록할 수 있습니다.');
+    }
+    await afterEventChange();     // 회차가 뒤로 줄줄이 밀리므로 다시 읽고 다시 그린다
+    const n = roundOf(key);
+    regEditSay(was
+      ? `${label(key)} 정기전을 해제했습니다. 뒤따르는 회차가 당겨졌습니다.`
+      : `${label(key)}${n ? ` 제${n}회` : ''} 정기전으로 지정했습니다.`);
+  } catch(e){
+    regEditSay('실패: ' + errText(e), true);
+  } finally {
+    regEditBusy = false;
+  }
+}
 
 // ══ 소속 팀 스위처 ══
 function renderTeamBar(){
