@@ -581,14 +581,17 @@ function openDay(key, opts = {}){
   // 모임 만들기 — 팀원 누구나. 지난 날짜에는 잡을 게 없으므로 닫는다.
   // 시트를 열 때 한 번만 비운다(참석을 누를 때마다 비우면 적던 내용이 날아간다).
   const canMeet = !past && !!auth && !!currentTeam;
-  $('#dsMt').style.display = canMeet ? '' : 'none';
+  canMeetNow = canMeet;
+  $('#dsAddMt').style.display = canMeet ? '' : 'none';
   if (canMeet) {
-    $('#dsMtTime').value = ''; $('#dsMtPlace').value = ''; $('#dsMtNote').value = '';
+    $('#dsMtPlace').value = ''; $('#dsMtNote').value = '';
+    mtH = DEF_H; mtM = DEF_M; mtTbd = false;
   }
 
   // 일정은 모임과 별개다 — 모임에 뭘 답했든 언제나 등록할 수 있다.
   const canPlan = !past && !!auth;
-  $('#dsPlan').style.display = canPlan ? '' : 'none';
+  canPlanNow = canPlan;
+  $('#dsAddPlan').style.display = canPlan ? '' : 'none';
   if (canPlan) {
     $('#dsPlanName').value = '';
     planDates = [key];        // 연 날짜부터 담아 둔다 — 하루짜리면 그대로 등록하면 된다
@@ -604,11 +607,23 @@ function openDay(key, opts = {}){
   }
   msg('');
   $('#daySheet').classList.add('on');
-  // '＋ 모임 만들기' 로 들어왔으면 입력 칸까지 데려간다 — 시트를 연 이유가 그거니까
-  if (opts.focusNew && canMeet) {
-    $('#dsMt').scrollIntoView({ block: 'nearest' });
-    $('#dsMtPlace').focus();
-  }
+  // 시트를 열 때는 늘 버튼 줄부터. '＋ 모임 만들기' 로 들어왔을 때만 그 칸을 바로 펼친다 —
+  // 시트를 연 이유가 그거니까. (시계는 보이는 상태에서만 자리를 맞출 수 있어 여기 순서가 중요하다)
+  setForm(opts.focusNew && canMeet ? 'mt' : null);
+}
+
+// ══ 추가 폼 열고 닫기 ══
+// 모임·일정 입력 칸을 늘 펼쳐 두면 시트가 길어져 그날 잡힌 모임이 아래로 밀린다.
+// 평소에는 버튼 두 개만 두고, 누른 쪽만 그 자리에서 연다.
+let canMeetNow = false, canPlanNow = false;
+
+function setForm(which){          // 'mt' | 'plan' | null
+  const mt = which === 'mt', pl = which === 'plan';
+  $('#dsMt').style.display   = mt ? '' : 'none';
+  $('#dsPlan').style.display = pl ? '' : 'none';
+  $('#dsAdd').style.display  = (!which && (canMeetNow || canPlanNow)) ? '' : 'none';
+  if (mt) syncMtTime(true);       // 시계 자리 맞추기 — 칸이 보인 뒤라야 스크롤이 먹는다
+  if (which) (mt ? $('#dsMt') : $('#dsPlan')).scrollIntoView({ block: 'nearest' });
 }
 
 // ══ 모임 카드 ══
@@ -735,6 +750,96 @@ async function rsvp(id, status){
   }
 }
 
+// ══ 전자시계형 시간 고르기 ══
+// 브라우저 기본 시계(input type=time)는 폰마다 생김새가 달라서 몇 시로 맞추기까지 손이 많이 갔다.
+// 여기서는 시·분 칸을 위아래로 굴리면 가운데 칸이 곧 고른 값이다.
+// 값은 스크롤 위치에서 읽는다 — 항목 하나가 T_ITEM 이고 칸 높이가 그 세 배라,
+// i 번째가 가운데 오는 스크롤 위치는 정확히 i*T_ITEM 이다.
+// (T_ITEM 은 index.html 의 .tpitem/.tppad 높이와 반드시 같아야 한다)
+const T_ITEM = 50;
+const HOURS = Array.from({ length: 24 }, (_, i) => i);
+const MINS  = [0, 10, 20, 30, 40, 50];      // 10분 단위 — 모임 약속에 그보다 잘게 잡을 일이 없다
+const DEF_H = 19, DEF_M = 0;                // 처음 열었을 때 — 저녁 7시
+
+let mtH = DEF_H, mtM = DEF_M, mtTbd = false;
+
+function makeWheel(el, vals, onPick){
+  el.innerHTML = '<div class="tppad"></div>'
+    + vals.map(v => `<div class="tpitem">${String(v).padStart(2, '0')}</div>`).join('')
+    + '<div class="tppad"></div>';
+  const items = [...el.querySelectorAll('.tpitem')];
+  const w = { idx: 0 };
+  const mark = () => items.forEach((n, j) => n.classList.toggle('on', j === w.idx));
+
+  let dragging = false, lastY = 0, settle = 0;
+
+  el.addEventListener('scroll', () => {
+    const i = Math.max(0, Math.min(vals.length - 1, Math.round(el.scrollTop / T_ITEM)));
+    if (i !== w.idx) { w.idx = i; mark(); vibTick(); onPick(vals[i]); }
+    // 어중간한 자리에 멈추면(마우스로 끌었거나 휠을 굴렸을 때) 가운데로 붙여 준다.
+    // 손가락 스크롤은 브라우저의 scroll-snap 이 알아서 맞춘다.
+    clearTimeout(settle);
+    settle = setTimeout(() => {
+      if (dragging) return;
+      const y = w.idx * T_ITEM;
+      if (Math.abs(el.scrollTop - y) > 1) el.scrollTo({ top: y, behavior: 'smooth' });
+    }, 110);
+  });
+
+  // 마우스로도 끌 수 있게 — 손가락은 브라우저 기본 스크롤이 그대로 맡는다
+  el.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'touch') return;
+    dragging = true; lastY = e.clientY;
+    el.style.scrollSnapType = 'none';        // 끄는 동안은 붙지 않아야 따라온다
+    try { el.setPointerCapture(e.pointerId); } catch(_){}
+  });
+  el.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    el.scrollTop -= e.clientY - lastY;
+    lastY = e.clientY;
+    e.preventDefault();
+  });
+  const up = () => {
+    if (!dragging) return;
+    dragging = false;
+    el.style.scrollSnapType = '';
+    el.scrollTo({ top: w.idx * T_ITEM, behavior: 'smooth' });
+  };
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+
+  el.addEventListener('keydown', e => {
+    const d = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
+    if (!d) return;
+    e.preventDefault();
+    w.set(vals[Math.max(0, Math.min(vals.length - 1, w.idx + d))], true);
+  });
+
+  w.set = (v, smooth) => {
+    const i = Math.max(0, vals.indexOf(v));
+    w.idx = i; mark();
+    el.scrollTo({ top: i * T_ITEM, behavior: smooth ? 'smooth' : 'auto' });
+  };
+  return w;
+}
+
+const wheelH = makeWheel($('#dsMtH'), HOURS, v => { mtH = v; syncMtTime(); });
+const wheelM = makeWheel($('#dsMtM'), MINS,  v => { mtM = v; syncMtTime(); });
+
+const mtTimeVal = () => mtTbd ? null
+  : `${String(mtH).padStart(2, '0')}:${String(mtM).padStart(2, '0')}`;
+
+// place = true 면 시계 자리까지 다시 맞춘다 (칸을 막 펼쳤을 때)
+function syncMtTime(place){
+  if (place) { wheelH.set(mtH); wheelM.set(mtM); }
+  $('#dsMtClock').classList.toggle('off', mtTbd);
+  $('#dsMtTbd').classList.toggle('on', mtTbd);
+  $('#dsMtTbd').setAttribute('aria-pressed', String(mtTbd));
+  $('#dsMtWhen').innerHTML = mtTbd
+    ? '시각 없이 올라갑니다'
+    : `<b>${esc(timeText(mtTimeVal()))}</b>에 모입니다`;
+}
+
 // ══ 모임 만들기 ══
 async function saveMeetup(){
   const auth = getAuth();
@@ -742,7 +847,7 @@ async function saveMeetup(){
   if (!auth || !currentTeam) return msg('로그인이 필요합니다.', 'err');
   if (isPast(key)) return msg('지난 날짜에는 모임을 만들 수 없습니다.', 'err');
 
-  const time  = $('#dsMtTime').value || null;        // '17:30' 또는 빈 값(시간 미정)
+  const time  = mtTimeVal();                         // '17:30' 또는 null('시간 미정')
   const place = $('#dsMtPlace').value.trim() || null;
   const note  = $('#dsMtNote').value.trim() || null;
   if (!place && !time) return msg('시간이나 장소 중 하나는 적어 주세요.', 'err');
@@ -1200,6 +1305,11 @@ const setVoice = b => { try { localStorage.setItem(LS_VOICE, JSON.stringify(b));
 
 $('#dsClose').onclick = () => $('#daySheet').classList.remove('on');
 $('#daySheet').onclick = e => { if (e.target.id === 'daySheet') $('#daySheet').classList.remove('on'); };
+$('#dsAddMt').onclick   = () => setForm('mt');
+$('#dsAddPlan').onclick = () => setForm('plan');
+$('#dsMtX').onclick     = () => setForm(null);
+$('#dsPlanX').onclick   = () => setForm(null);
+$('#dsMtTbd').onclick   = () => { mtTbd = !mtTbd; vibTick(); syncMtTime(); };
 $('#dsMtSave').onclick = saveMeetup;
 $('#dsPlanSave').onclick = savePlan;
 $('#dsPlanPick').onclick = openPlanPicker;

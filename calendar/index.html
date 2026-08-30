@@ -181,15 +181,61 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
 .tally button.on span::after{content:' ✓'}
 .tally button:disabled{cursor:default;opacity:.55}
 .tally button:disabled:active{transform:none}
+/* ── 추가 버튼 줄 ── */
+/* 모임·일정 입력 칸을 늘 펼쳐 두면 시트가 길어져 그날 잡힌 모임이 밀린다.
+   평소에는 버튼 두 개만 놓고, 누른 쪽 입력 칸만 그 자리에서 열린다 (app.js 의 openForm). */
+.addrow{display:flex;gap:8px;margin-top:14px}
+.addbtn{flex:1 1 0;min-width:0;display:flex;align-items:center;justify-content:center;gap:6px;
+  padding:14px 8px;border:1px solid var(--line);border-radius:12px;background:var(--bg);
+  color:var(--text);font-family:inherit;font-size:.95rem;font-weight:700;cursor:pointer}
+.addbtn:active{background:var(--hover);border-color:var(--accent);transform:scale(.98)}
+
 /* ── 시트 안 입력 상자 (모임 만들기 / 일정 등록) ── */
 .vbox{margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--bg)}
+.vhd{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
 .vlab{font-size:.82rem;color:var(--muted);font-weight:700;margin-bottom:8px}
+.vhd .vlab{margin-bottom:0}
+/* 입력 칸을 닫고 버튼 줄로 돌아가는 단추 */
+.vx{flex:0 0 auto;width:28px;height:28px;padding:0;background:none;border:1px solid var(--line);
+  border-radius:8px;color:var(--muted);font-size:1.15rem;line-height:1;cursor:pointer}
+.vx:active{background:var(--hover)}
 /* 모임 만들기 폼 — 시간과 장소를 한 줄에 놓는다. 시간은 좁게, 장소는 남는 만큼. */
 .mtrow{display:flex;gap:6px;margin-bottom:8px}
 .mtrow .inp{flex:1 1 auto;min-width:0}
 .mtrow .inp.t{flex:0 0 7.5em}
 /* 모임을 만들 수 없는 상태(로그인 전·지난 날짜)에는 상자째 감춘다 — 아래 app.js 가 켠다 */
 .wide{width:100%;margin-top:2px}
+
+/* ── 전자시계형 시간 고르기 ── */
+/* 시·분 칸을 위아래로 굴려 맞춘다. 브라우저 기본 시계(type=time)는 폰마다 생김새가 달라
+   몇 시인지 고르기까지 손이 많이 갔다. 여기서는 굴리는 즉시 가운데 값이 곧 고른 값이다.
+   칸 높이(50px)는 app.js 의 T_ITEM 과 반드시 같아야 한다 — 스크롤 위치로 값을 읽기 때문. */
+.tpick{position:relative;display:flex;align-items:center;justify-content:center;gap:4px;
+  height:150px;margin:2px 0 8px;border:1px solid var(--line);border-radius:12px;
+  background:var(--card);overflow:hidden;user-select:none;-webkit-user-select:none}
+/* '시간 미정'을 켜면 시계를 잠근다 — 값이 남아 있어도 쓰이지 않는다는 걸 눈으로 알려 준다 */
+.tpick.off{opacity:.35;pointer-events:none}
+.tpband{position:absolute;left:12px;right:12px;top:50%;height:50px;transform:translateY(-50%);
+  border-radius:10px;background:var(--accent-bg);border:1px solid var(--accent-soft);pointer-events:none}
+/* 위아래 끝을 흐리게 지워 원통이 굴러가는 것처럼 보이게 한다 */
+.tpcol{position:relative;height:150px;width:78px;overflow-y:scroll;scroll-snap-type:y mandatory;
+  overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:none;-ms-overflow-style:none;
+  -webkit-mask-image:linear-gradient(180deg,transparent 2%,#000 30%,#000 70%,transparent 98%);
+          mask-image:linear-gradient(180deg,transparent 2%,#000 30%,#000 70%,transparent 98%)}
+.tpcol::-webkit-scrollbar{display:none}
+.tppad{height:50px}
+.tpitem{height:50px;line-height:50px;text-align:center;scroll-snap-align:center;
+  font-size:1.55rem;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:.02em;
+  color:var(--muted);opacity:.45;transition:color .12s,opacity .12s,transform .12s}
+.tpitem.on{color:var(--accent);opacity:1;transform:scale(1.08)}
+.tpsep{font-size:1.5rem;font-weight:800;color:var(--muted);padding-bottom:3px}
+.tpfoot{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.tpnow{flex:1 1 auto;min-width:0;font-size:.82rem;color:var(--muted);font-weight:700}
+.tpnow b{color:var(--text);font-weight:800}
+/* 시간 미정 토글 — 켜져 있으면 시간을 비운 채로 올린다 */
+.tbd{flex:0 0 auto;padding:8px 12px;border:1px solid var(--line);border-radius:999px;
+  background:var(--card);color:var(--muted);font-family:inherit;font-size:.82rem;font-weight:700;cursor:pointer}
+.tbd.on{background:var(--accent);border-color:var(--accent);color:#fff}
 
 /* ── 등록된 일정 목록 ── */
 .agg{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
@@ -329,23 +375,43 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
     <!-- 이 날 잡힌 모임들. 카드마다 참석/불참 버튼과 참석자 이름이 붙는다 (app.js 가 그린다) -->
     <div id="dsMeetups"></div>
 
+    <!-- 무엇을 추가할지부터 고른다. 누른 쪽 입력 칸만 아래에서 열린다 (app.js 의 openForm) -->
+    <div class="addrow" id="dsAdd" style="display:none;">
+      <button type="button" class="addbtn" id="dsAddMt">🎱 모임 만들기</button>
+      <button type="button" class="addbtn" id="dsAddPlan">📌 일정 등록</button>
+    </div>
+
     <!-- 모임 만들기 — 팀원 누구나. 날짜는 지금 연 날짜로 고정이고 시간·장소만 적는다. -->
     <div class="vbox" id="dsMt" style="display:none;">
-      <div class="vlab">🎱 이 날 모임 만들기</div>
-      <div class="mtrow">
-        <input id="dsMtTime" class="inp t" type="time" step="300" aria-label="모임 시간">
-        <input id="dsMtPlace" class="inp" maxlength="30" placeholder="장소 (예: 메카당구장)">
+      <div class="vhd">
+        <div class="vlab">🎱 이 날 모임 만들기</div>
+        <button type="button" class="vx" id="dsMtX" aria-label="닫기">&times;</button>
       </div>
+      <!-- 시·분 칸은 app.js 가 채운다 (분은 10분 단위) -->
+      <div class="tpick" id="dsMtClock">
+        <div class="tpband"></div>
+        <div class="tpcol" id="dsMtH" tabindex="0" role="listbox" aria-label="모임 시각(시)"></div>
+        <div class="tpsep">:</div>
+        <div class="tpcol" id="dsMtM" tabindex="0" role="listbox" aria-label="모임 시각(분)"></div>
+      </div>
+      <div class="tpfoot">
+        <div class="tpnow" id="dsMtWhen"></div>
+        <button type="button" class="tbd" id="dsMtTbd" aria-pressed="false">시간 미정</button>
+      </div>
+      <input id="dsMtPlace" class="inp wide" maxlength="30" placeholder="장소 (예: 메카당구장)">
       <input id="dsMtNote" class="inp wide" maxlength="40" placeholder="메모 (선택)">
-      <button id="dsMtSave" class="sbtn wide">＋ 모임 만들고 알림 보내기</button>
-      <div class="sub" style="margin-top:8px; font-size:.75rem;">알림을 켜 둔 팀원에게 바로 알림이 갑니다. 시간을 비우면 '시간 미정'으로 올라갑니다.</div>
+      <button id="dsMtSave" class="sbtn wide" style="margin-top:8px;">＋ 모임 만들고 알림 보내기</button>
+      <div class="sub" style="margin-top:8px; font-size:.75rem;">알림을 켜 둔 팀원에게 바로 알림이 갑니다. '시간 미정'을 켜면 시각 없이 올라갑니다.</div>
     </div>
 
     <!-- 내 일정 — 모임과 별개인 개인 메모다. 같은 날에 몇 개든 쌓을 수 있다.
          날짜는 시작~끝이 아니라 하나씩 골라 담는다 (떨어진 날도 한 번에).
          등록한 일정은 아래 '등록된 일정' 목록에 나오고 거기서 지운다. -->
     <div class="vbox" id="dsPlan" style="display:none;">
-      <div class="vlab">📌 일정 등록</div>
+      <div class="vhd">
+        <div class="vlab">📌 일정 등록</div>
+        <button type="button" class="vx" id="dsPlanX" aria-label="닫기">&times;</button>
+      </div>
       <input id="dsPlanName" class="inp wide" maxlength="20" placeholder="일정 이름 (예: 시험기간)">
       <div id="dsPlanPick" class="pickbox" role="button" tabindex="0" aria-label="일정 날짜 고르기">📅 날짜 고르기</div>
       <button id="dsPlanSave" class="sbtn wide">＋ 일정 등록</button>
