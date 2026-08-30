@@ -365,6 +365,12 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
 .regmore{width:100%;margin-top:8px;padding:11px;border:1px solid var(--line);border-radius:11px;
   background:var(--card);color:var(--text);font-weight:700;font-size:.88rem;font-family:inherit;cursor:pointer}
 .regmore:active{background:var(--hover)}
+.regmore.on{border-color:var(--accent);color:var(--accent)}
+/* 일괄 삭제 — 시작~끝 날짜 두 칸을 한 줄에 */
+.regrow{display:flex;align-items:center;gap:8px}
+.regrow .inp{flex:1 1 0;min-width:0}
+.regrow .sep{flex:0 0 auto;color:var(--muted);font-weight:700}
+.sbtn.danger{background:var(--no)}
 
 /* ══ 직접 수정 모드 ══
    달력을 그대로 두고 칸을 누르면 그 날 정기전이 켜지고 꺼진다. 평소 버튼 줄 자리에
@@ -512,8 +518,6 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
 <div id="regModal" class="setmask">
   <div class="setcard">
     <div class="sethd"><b>🏅 정기전 설정</b><button class="setx" id="regClose">&times;</button></div>
-    <div class="sub">언제 모일지만 정하면 <b>오늘부터</b> 그 주기대로 회차가 자동으로 매겨집니다.</div>
-
     <div class="reglab">반복 방식</div>
     <div class="setseg" id="regMode">
       <button type="button" data-k="week">매주</button>
@@ -553,9 +557,23 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
     <div class="regprev" id="regPrev"></div>
     <div class="msg" id="regMsg"></div>
     <button class="sbtn" id="regApply" style="width:100%; margin-top:12px;">정기전 등록</button>
-    <div class="sub" style="margin-top:8px; font-size:.75rem;">오늘부터 이 기간 안에 이미 등록된 정기전은 새 일정으로 대체됩니다.</div>
     <!-- 규칙으로 안 잡히는 날은 달력에서 손으로 켜고 끈다 — 누르면 이 창을 닫고 달력으로 돌아간다 -->
     <button class="regmore" id="regEditGo" type="button">📅 달력에서 직접 수정</button>
+
+    <!-- 일괄 삭제 — 평소엔 접어 둔다. 지우는 일이라 한 번 더 누르게 해서 오조작을 막는다.
+         지난 정기전은 기록이므로 손댈 수 없다 → 두 칸 모두 오늘이 최소값이다. -->
+    <button class="regmore" id="regDelGo" type="button" aria-expanded="false">🗑️ 정기전 일괄 삭제</button>
+    <div id="regDelBox" style="display:none">
+      <div class="reglab">삭제할 기간 <span class="cnt">오늘 이후만</span></div>
+      <div class="regrow">
+        <input id="regDelFrom" class="inp" type="date">
+        <span class="sep">~</span>
+        <input id="regDelTo" class="inp" type="date">
+      </div>
+      <div class="regprev" id="regDelPrev"></div>
+      <div class="msg" id="regDelMsg"></div>
+      <button class="sbtn danger" id="regDelApply" style="width:100%; margin-top:12px;">이 기간의 정기전 삭제</button>
+    </div>
   </div>
 </div>
 

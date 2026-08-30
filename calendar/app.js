@@ -259,7 +259,7 @@ function render(){
   }
 
   // 팀을 옮기거나 팀장에서 내려오면 직접 수정 모드는 저절로 풀린다 (남의 팀 달력을 고치지 않도록)
-  if (regEditing && !isTeamLeader) { regEditing = false; regEditMsg = ''; regEditBad = false; }
+  if (regEditing && !isTeamLeader) { regEditing = false; regEditErr = ''; }
 
   const y = cur.getFullYear(), m = cur.getMonth();
   const first = new Date(y, m, 1);
@@ -347,7 +347,7 @@ function render(){
     <div class="dow">${DOW.map((w, i) => `<span class="${i === 0 ? 'sun' : i === 6 ? 'sat' : ''}">${w}</span>`).join('')}</div>
     <div class="gridclip"><div class="grid${regEditing ? ' editing' : ''}" id="grid">${weeks}</div></div>
     <div class="sub" style="text-align:center; margin:14px 0 20px;">
-      ${regEditing ? '수정을 마치면 위의 완료를 누르세요.' : '날짜를 눌러 모임을 만들거나 참석 여부를 고르세요.'}
+      ${regEditing ? '날짜를 눌러 정기전을 켜고 끕니다.' : '날짜를 눌러 모임을 만들거나 참석 여부를 고르세요.'}
     </div>
     ${regEditing ? '' : upNextHtml()}
   `;
@@ -426,10 +426,16 @@ function bindSwipe(grid){
 // 직접 수정 중에는 평소 버튼 대신 안내 띠가 그 자리에 들어간다 — 달력은 그대로 두고
 // 지금이 평소와 다른 상태라는 것만 계속 알린다.
 function barHtml(){
-  if (regEditing) return `<div class="editbar${regEditBad ? ' bad' : ''}" id="regEditBar">
-      <span class="t" id="regEditNote">${esc(regEditMsg || REG_EDIT_HELP)}</span>
-      <button type="button" id="regEditDone">완료</button>
-    </div>`;
+  // 잘 되고 있을 땐 평소 버튼 줄 자리에 완료 버튼 하나만 둔다 — 결과는 달력이 직접 보여 준다.
+  // 실패했을 때만 붉은 띠로 넓어져서 이유를 말한다 (조용히 안 먹은 것처럼 보이면 안 되므로).
+  if (regEditing) return regEditErr
+    ? `<div class="editbar bad" id="regEditBar">
+        <span class="t" id="regEditNote">${esc(regEditErr)}</span>
+        <button type="button" id="regEditDone">완료</button>
+      </div>`
+    : `<div class="bulkbar" id="regEditBar">
+        <button type="button" class="bulkbtn go" id="regEditDone">완료</button>
+      </div>`;
   return `<div class="bulkbar">
       ${isTeamLeader ? '<button type="button" class="bulkbtn" id="regOn">정기전 설정</button>' : ''}
       <button type="button" class="bulkbtn go" id="mtNew">＋ 모임 만들기</button>
@@ -1250,9 +1256,19 @@ async function openRegModal(){
   regMonths = cfg && cfg.months ? cfg.months : 3;
   regMsg('');
   regSyncMode();
+
+  // 일괄 삭제는 늘 접힌 채로, 빈 칸으로 다시 시작한다 (지난번에 고른 기간이 남아 있으면 위험하다)
+  const today = todayStr();
+  $('#regDelBox').style.display = 'none';
+  $('#regDelGo').classList.remove('on');
+  $('#regDelGo').setAttribute('aria-expanded', 'false');
+  for (const id of ['#regDelFrom', '#regDelTo']) { $(id).value = ''; $(id).min = today; }
+  regDelMsg('');
+
   $('#regModal').classList.add('on');
   await ensureSeq();       // 시작 회차를 세려면 회차 표가 있어야 한다
   regSyncPrev();
+  regDelSyncPrev();
 }
 
 async function regApply(){
@@ -1332,36 +1348,97 @@ async function regApply(){
   $('#regApply').onclick = regApply;
   // 창을 닫고 달력을 그대로 둔 채 수정 모드로 들어간다 — 달력이 곧 편집 화면이다
   $('#regEditGo').onclick = () => { close(); regEditStart(); };
+
+  // 일괄 삭제는 평소엔 접혀 있다 — 지우는 일이라 눈에 먼저 띄면 곤란하다
+  $('#regDelGo').onclick = () => {
+    const box = $('#regDelBox'), open = box.style.display === 'none';
+    box.style.display = open ? '' : 'none';
+    $('#regDelGo').classList.toggle('on', open);
+    $('#regDelGo').setAttribute('aria-expanded', open);
+    if (open) regDelSyncPrev();
+  };
+  $('#regDelFrom').onchange = () => { regDelSyncPrev(); regDelMsg(''); };
+  $('#regDelTo').onchange   = () => { regDelSyncPrev(); regDelMsg(''); };
+  $('#regDelApply').onclick = regDelApply;
 })();
+
+// ══ 정기전 일괄 삭제 (팀장) ══
+// 고른 기간 안의 정기전을 통째로 지운다. 지난 정기전은 이미 치른 기록이라 손대지 못하게
+// 두 칸 모두 오늘이 최소값이다 (input 의 min 과 아래 검사 두 겹 — 직접 입력도 막아야 한다).
+const regDelCount = (a, b) => eventSeq ? [...eventSeq.keys()].filter(k => k >= a && k <= b).length : 0;
+
+function regDelMsg(t, kind){
+  const el = $('#regDelMsg');
+  el.textContent = t || '';
+  el.className = 'msg' + (kind ? ' ' + kind : '');
+}
+
+// 고른 기간이 쓸 만한지 보고, 쓸 만하면 몇 회가 지워지는지 미리 알려 준다.
+// 문제가 있으면 그 이유를 그대로 돌려줘서 삭제 버튼과 미리보기가 같은 말을 하게 한다.
+function regDelCheck(){
+  const a = $('#regDelFrom').value, b = $('#regDelTo').value;
+  if (!a || !b) return { err: '지울 <b>기간</b>을 골라 주세요.' };
+  if (a < todayStr()) return { err: '오늘 이후만 지울 수 있습니다.' };
+  if (b < a) return { err: '끝 날짜가 시작 날짜보다 빠릅니다.' };
+  const n = regDelCount(a, b);
+  if (!n) return { err: '이 기간에 등록된 정기전이 없습니다.' };
+  return { a, b, n };
+}
+
+function regDelSyncPrev(){
+  const prev = $('#regDelPrev');
+  const r = regDelCheck();
+  prev.innerHTML = r.err
+    ? r.err
+    : `<span class="rd">${label(r.a)}</span> ~ <span class="rd">${label(r.b)}</span>`
+      + `<br>정기전 <b>${r.n}회</b>를 지웁니다.`;
+}
+
+async function regDelApply(){
+  if (!isTeamLeader || !currentTeam) return regDelMsg('팀장만 정기전을 지울 수 있습니다.', 'err');
+  const r = regDelCheck();
+  if (r.err) return regDelMsg(r.err.replace(/<[^>]+>/g, ''), 'err');
+  if (!confirm(`${label(r.a)}부터 ${label(r.b)}까지\n`
+    + `정기전 ${r.n}회를 모두 지웁니다.\n\n`
+    + `뒤따르는 정기전의 회차가 그만큼 당겨집니다.\n계속할까요?`)) return;
+
+  regDelMsg('삭제 중...');
+  try {
+    await sbFetch(`/rest/v1/club_events?team_id=eq.${currentTeam}`
+      + `&event_date=gte.${r.a}&event_date=lte.${r.b}`, { method: 'DELETE' });
+    await afterEventChange();       // 여러 달이 한꺼번에 비었다 — 캐시를 버리고 다시 읽는다
+    regDelSyncPrev();
+    regDelMsg(`정기전 ${r.n}회를 지웠습니다.`, 'ok');
+  } catch(e){
+    regDelMsg('삭제 실패: ' + errText(e), 'err');
+  }
+}
 
 // ══ 직접 수정 (팀장) ══
 // 규칙으로 안 잡히는 날을 위한 손질 모드. 달력을 그대로 두고, 칸을 누르면 그 날 정기전이
 // 켜지고 이미 정기전인 날을 누르면 꺼진다. 회차는 늘 날짜 순서가 정하므로 손댈 것이 없다.
-const REG_EDIT_HELP = '날짜를 눌러 정기전을 지정하고, 이미 정기전인 날은 다시 눌러 해제하세요.';
-
+// 결과는 달력이 그 자리에서 보여 주므로 따로 알리지 않는다 — 띠에는 완료 버튼만 둔다.
 let regEditing = false;   // 지금 수정 모드인가
 let regEditBusy = false;  // 요청 하나가 끝나기 전엔 다음 칸을 받지 않는다 (연타로 회차가 꼬이지 않게)
-let regEditMsg  = '';     // 안내 띠에 띄울 최근 결과
-let regEditBad  = false;  // 그 결과가 실패인가
+let regEditErr  = '';     // 실패했을 때만 띄운다 (조용히 안 먹은 것처럼 보이면 안 되므로)
 
 function regEditStart(){
   if (!isTeamLeader || !currentTeam) return;
-  regEditing = true; regEditMsg = ''; regEditBad = false;
+  regEditing = true; regEditErr = '';
   render();
-  scrollTo({ top: 0, behavior: 'smooth' });   // 안내 띠를 눈에 넣고 시작한다
+  scrollTo({ top: 0, behavior: 'smooth' });   // 완료 버튼과 달력을 한눈에 두고 시작한다
 }
 
 function regEditStop(){
-  regEditing = false; regEditMsg = ''; regEditBad = false;
+  regEditing = false; regEditErr = '';
   render();
 }
 
-// 안내 띠는 render 가 새로 그리므로 값부터 남기고, 지금 떠 있는 띠는 그 자리에서 고친다
-function regEditSay(t, bad){
-  regEditMsg = t; regEditBad = !!bad;
-  const bar = $('#regEditBar'), note = $('#regEditNote');
-  if (bar) bar.classList.toggle('bad', regEditBad);
-  if (note) note.textContent = t || REG_EDIT_HELP;
+// 있고 없고에 따라 버튼 줄의 모양 자체가 달라지므로, 바뀔 때만 다시 그린다
+function regEditSay(t){
+  if (regEditErr === (t || '')) return;
+  regEditErr = t || '';
+  render();
 }
 
 async function regToggleDay(key){
@@ -1369,7 +1446,6 @@ async function regToggleDay(key){
   if (regEditBusy) return;
   regEditBusy = true;
   const was = !!events[key];
-  regEditSay(`${label(key)} ${was ? '해제' : '지정'} 중...`);
   try {
     if (was) {
       await sbFetch(`/rest/v1/club_events?team_id=eq.${currentTeam}&event_date=eq.${key}`, { method: 'DELETE' });
@@ -1383,12 +1459,9 @@ async function regToggleDay(key){
       if (!rows || !rows.length) throw new Error('권한이 없습니다. 팀장만 등록할 수 있습니다.');
     }
     await afterEventChange();     // 회차가 뒤로 줄줄이 밀리므로 다시 읽고 다시 그린다
-    const n = roundOf(key);
-    regEditSay(was
-      ? `${label(key)} 정기전을 해제했습니다. 뒤따르는 회차가 당겨졌습니다.`
-      : `${label(key)}${n ? ` 제${n}회` : ''} 정기전으로 지정했습니다.`);
+    regEditSay('');
   } catch(e){
-    regEditSay('실패: ' + errText(e), true);
+    regEditSay('실패: ' + errText(e));
   } finally {
     regEditBusy = false;
   }
