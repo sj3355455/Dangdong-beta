@@ -584,7 +584,10 @@ function openDay(key, opts = {}){
   canMeetNow = canMeet;
   $('#dsAddMt').style.display = canMeet ? '' : 'none';
   if (canMeet) {
-    $('#dsMtPlace').value = ''; $('#dsMtNote').value = '';
+    // 장소는 비우지 않는다 — 저장해 둔 곳이 있으면 그대로 채워 두는 게 이 칸의 요점이다
+    $('#dsMtPlace').value = getPlaces()[0] || '';
+    $('#dsMtNote').value = '';
+    $('#dsMtKeep').checked = getKeep();
     mtH = DEF_H; mtM = DEF_M; mtTbd = false;
   }
 
@@ -622,7 +625,7 @@ function setForm(which){          // 'mt' | 'plan' | null
   $('#dsMt').style.display   = mt ? '' : 'none';
   $('#dsPlan').style.display = pl ? '' : 'none';
   $('#dsAdd').style.display  = (!which && (canMeetNow || canPlanNow)) ? '' : 'none';
-  if (mt) syncMtTime(true);       // 시계 자리 맞추기 — 칸이 보인 뒤라야 스크롤이 먹는다
+  if (mt) { syncMtTime(true); syncKeep(); renderPlaces(); }   // 시계 자리 맞추기 — 칸이 보인 뒤라야 스크롤이 먹는다
   if (which) (mt ? $('#dsMt') : $('#dsPlan')).scrollIntoView({ block: 'nearest' });
 }
 
@@ -840,6 +843,52 @@ function syncMtTime(place){
     : `<b>${esc(timeText(mtTimeVal()))}</b>에 모입니다`;
 }
 
+// ══ 자주 가는 장소 ══
+// 모임 장소는 늘 가던 당구장이라 매번 다시 칠 일이 없다. '저장'을 켜고 모임을 만들면
+// 그 장소를 기억해 두고, 다음에 모임 칸을 열 때 가장 최근 것을 미리 채워 준다.
+// 팀이 아니라 이 기기에만 남긴다 — 사람마다 자주 가는 곳이 다르고, 서버를 건드릴 일도 아니다.
+const LS_PLACES = 'dangMeetPlaces', LS_KEEP = 'dangMeetPlaceKeep';
+const PLACE_MAX = 5;                       // 칩이 두 줄을 넘지 않을 만큼만 남긴다
+
+const getPlaces = () => {
+  try {
+    const v = JSON.parse(localStorage.getItem(LS_PLACES));
+    return Array.isArray(v) ? v.filter(x => typeof x === 'string' && x).slice(0, PLACE_MAX) : [];
+  } catch(e){ return []; }
+};
+const setPlaces = a => { try { localStorage.setItem(LS_PLACES, JSON.stringify(a.slice(0, PLACE_MAX))); } catch(e){} };
+const getKeep = () => { try { return localStorage.getItem(LS_KEEP) !== '0'; } catch(e){ return true; } };
+
+// 방금 쓴 곳을 맨 앞으로 (같은 곳을 두 번 담지 않는다)
+function rememberPlace(p){
+  if (!p) return;
+  setPlaces([p, ...getPlaces().filter(x => x !== p)]);
+}
+
+function renderPlaces(){
+  const box = $('#dsMtPlaces');
+  const now = $('#dsMtPlace').value.trim();
+  box.innerHTML = getPlaces().map(p =>
+    `<button type="button" class="plchip${p === now ? ' on' : ''}" data-p="${esc(p)}">
+       <span class="nm">${esc(p)}</span><span class="x" data-del="${esc(p)}" aria-label="${esc(p)} 목록에서 지우기">&times;</span>
+     </button>`).join('');
+
+  box.querySelectorAll('.plchip').forEach(b => b.onclick = () => {
+    $('#dsMtPlace').value = b.dataset.p;
+    vibTick(); renderPlaces();
+  });
+  // ×는 칩보다 먼저 받아서 위로 올리지 않는다 — 지우려다 골라지면 곤란하다
+  box.querySelectorAll('.plchip .x').forEach(x => x.onclick = e => {
+    e.stopPropagation();
+    setPlaces(getPlaces().filter(p => p !== x.dataset.del));
+    renderPlaces();
+  });
+}
+
+function syncKeep(){
+  $('#dsMtKeepL').classList.toggle('on', $('#dsMtKeep').checked);
+}
+
 // ══ 모임 만들기 ══
 async function saveMeetup(){
   const auth = getAuth();
@@ -866,6 +915,9 @@ async function saveMeetup(){
   } catch(e){
     return msg('모임을 만들지 못했습니다: ' + errText(e), 'err');
   }
+
+  // 모임이 실제로 만들어졌을 때만 기억한다 (아래 openDay 가 이 목록을 다시 읽는다)
+  if ($('#dsMtKeep').checked) rememberPlace(place);
 
   await refresh(true);
   openDay(key);
@@ -1310,6 +1362,12 @@ $('#dsAddPlan').onclick = () => setForm('plan');
 $('#dsMtX').onclick     = () => setForm(null);
 $('#dsPlanX').onclick   = () => setForm(null);
 $('#dsMtTbd').onclick   = () => { mtTbd = !mtTbd; vibTick(); syncMtTime(); };
+$('#dsMtPlace').oninput = renderPlaces;                       // 저장해 둔 곳과 같아지면 칩이 켜진다
+$('#dsMtKeep').onchange = () => {
+  // 체크 상태는 기기에 남긴다 — 한 번 꺼 두면 다음에도 꺼진 채로 열린다
+  try { localStorage.setItem(LS_KEEP, $('#dsMtKeep').checked ? '1' : '0'); } catch(e){}
+  syncKeep();
+};
 $('#dsMtSave').onclick = saveMeetup;
 $('#dsPlanSave').onclick = savePlan;
 $('#dsPlanPick').onclick = openPlanPicker;

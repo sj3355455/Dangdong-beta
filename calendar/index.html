@@ -229,6 +229,26 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
   color:var(--muted);opacity:.45;transition:color .12s,opacity .12s,transform .12s}
 .tpitem.on{color:var(--accent);opacity:1;transform:scale(1.08)}
 .tpsep{font-size:1.5rem;font-weight:800;color:var(--muted);padding-bottom:3px}
+/* ── 장소 저장 ── */
+.plrow{display:flex;gap:6px;margin-top:2px}
+.plrow .inp{flex:1 1 auto;min-width:0}
+/* 저장 체크 — 입력 칸과 같은 높이로 붙여 둔다 */
+.keep{flex:0 0 auto;display:flex;align-items:center;gap:5px;padding:0 11px;border:1px solid var(--line);
+  border-radius:8px;background:var(--card);color:var(--muted);font-size:.82rem;font-weight:700;
+  white-space:nowrap;cursor:pointer;user-select:none;-webkit-user-select:none}
+.keep input{width:15px;height:15px;margin:0;accent-color:var(--accent)}
+.keep.on{color:var(--accent);border-color:var(--accent-soft);background:var(--accent-bg)}
+/* 저장해 둔 장소 — 누르면 위 칸에 채워진다. 오른쪽 ×로 목록에서 지운다. */
+.plchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.plchips:empty{display:none}
+.plchip{display:inline-flex;align-items:center;gap:2px;padding:6px 6px 6px 11px;border:1px solid var(--line);
+  border-radius:999px;background:var(--card);color:var(--text);font-family:inherit;font-size:.8rem;
+  font-weight:700;cursor:pointer;max-width:100%}
+.plchip .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.plchip .x{flex:0 0 auto;width:18px;text-align:center;color:var(--muted);font-size:.95rem;line-height:1}
+.plchip.on{background:var(--accent-bg);border-color:var(--accent-soft);color:var(--accent)}
+.plchip:active{border-color:var(--accent)}
+
 .tpfoot{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .tpnow{flex:1 1 auto;min-width:0;font-size:.82rem;color:var(--muted);font-weight:700}
 .tpnow b{color:var(--text);font-weight:800}
@@ -398,10 +418,18 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
         <div class="tpnow" id="dsMtWhen"></div>
         <button type="button" class="tbd" id="dsMtTbd" aria-pressed="false">시간 미정</button>
       </div>
-      <input id="dsMtPlace" class="inp wide" maxlength="30" placeholder="장소 (예: 메카당구장)">
+      <!-- 장소는 늘 가던 당구장이라 매번 다시 칠 일이 없다 → '저장'을 켜 두면 다음에 자동으로 채워진다.
+           저장된 곳은 아래 칩으로 나오고, 눌러서 골라 쓴다 (app.js 의 renderPlaces). -->
+      <div class="plrow">
+        <input id="dsMtPlace" class="inp" maxlength="30" placeholder="장소 (예: 메카당구장)">
+        <label class="keep" id="dsMtKeepL" title="이 장소를 다음에도 쓰도록 저장">
+          <input type="checkbox" id="dsMtKeep"><span>저장</span>
+        </label>
+      </div>
+      <div class="plchips" id="dsMtPlaces"></div>
       <input id="dsMtNote" class="inp wide" maxlength="40" placeholder="메모 (선택)">
       <button id="dsMtSave" class="sbtn wide" style="margin-top:8px;">＋ 모임 만들고 알림 보내기</button>
-      <div class="sub" style="margin-top:8px; font-size:.75rem;">알림을 켜 둔 팀원에게 바로 알림이 갑니다. '시간 미정'을 켜면 시각 없이 올라갑니다.</div>
+      <div class="sub" style="margin-top:8px; font-size:.75rem;">알림을 켜 둔 팀원에게 바로 알림이 갑니다. '시간 미정'을 켜면 시각 없이 올라갑니다. 저장한 장소는 이 기기에만 남습니다.</div>
     </div>
 
     <!-- 내 일정 — 모임과 별개인 개인 메모다. 같은 날에 몇 개든 쌓을 수 있다.
