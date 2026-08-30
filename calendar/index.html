@@ -355,6 +355,28 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
   font-size:.88rem;line-height:1.6;text-align:center;color:var(--muted)}
 .regprev b{color:var(--accent);font-weight:800}
 .regprev .rd{color:var(--text);font-weight:700}
+/* 매월 — 1~31 일 칩. 요일 칩과 같은 모양이되 일곱 개씩 줄바꿈된다 */
+.dompick{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.dompick button{padding:9px 0;border:1.5px solid var(--line);border-radius:9px;background:var(--card);
+  color:var(--muted);font-size:.82rem;font-weight:700;font-family:inherit;cursor:pointer}
+.dompick button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.dompick button:active{transform:scale(.97)}
+/* 일별 — 모달 안의 작은 달력. 날짜를 눌러 하나씩 켜고 끈다 */
+.regcal{border:1px solid var(--line);border-radius:12px;padding:8px;background:var(--bg)}
+.regcalhd{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.regcalhd b{font-size:.9rem}
+.regcalhd button{width:32px;height:32px;border:1px solid var(--line);border-radius:8px;background:var(--card);
+  color:var(--text);font-size:1rem;font-family:inherit;cursor:pointer}
+.regcalw{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:3px}
+.regcalw span{text-align:center;font-size:.7rem;font-weight:700;color:var(--muted)}
+.regcalw span.sun{color:var(--no)} .regcalw span.sat{color:#3b82f6}
+.regcalgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.regcalgrid button{aspect-ratio:1;border:1.5px solid transparent;border-radius:9px;background:none;
+  color:var(--text);font-size:.82rem;font-weight:600;font-family:inherit;cursor:pointer;padding:0}
+.regcalgrid button.pad{visibility:hidden;pointer-events:none}
+.regcalgrid button.sun{color:var(--no)} .regcalgrid button.sat{color:#3b82f6}
+.regcalgrid button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.regcalgrid button:active{transform:scale(.94)}
 </style>
 </head>
 <body>
@@ -488,41 +510,70 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
 <div id="regModal" class="setmask">
   <div class="setcard">
     <div class="sethd"><b>🏅 정기전 설정</b><button class="setx" id="regClose">&times;</button></div>
-    <div class="sub">주 몇 회, 무슨 요일에 모일지 정하면 회차가 자동으로 계산됩니다.</div>
+    <div class="sub">언제 모일지만 정하면 회차는 자동으로 계산됩니다.</div>
 
-    <div class="reglab">주 횟수</div>
-    <div class="setseg" id="regFreq">
-      <button type="button" data-n="1">주 1회</button>
-      <button type="button" data-n="2">주 2회</button>
-      <button type="button" data-n="3">주 3회</button>
+    <div class="reglab">반복 방식</div>
+    <div class="setseg" id="regMode">
+      <button type="button" data-k="day">일별</button>
+      <button type="button" data-k="week">매주</button>
+      <button type="button" data-k="month">매월</button>
     </div>
 
-    <div class="reglab">요일 <span class="cnt" id="regDowCnt"></span></div>
-    <div class="dowpick" id="regDow">
-      <button type="button" class="sun" data-w="0">일</button>
-      <button type="button" data-w="1">월</button>
-      <button type="button" data-w="2">화</button>
-      <button type="button" data-w="3">수</button>
-      <button type="button" data-w="4">목</button>
-      <button type="button" data-w="5">금</button>
-      <button type="button" class="sat" data-w="6">토</button>
+    <!-- 일별 — 달력에서 날짜를 직접 골라 넣는다 (규칙이 없는 불규칙한 일정용) -->
+    <div id="regDayBox">
+      <div class="reglab">날짜 선택 <span class="cnt" id="regDayCnt"></span></div>
+      <div class="regcal">
+        <div class="regcalhd">
+          <button type="button" id="regCalPrev" aria-label="이전 달">‹</button>
+          <b id="regCalTitle"></b>
+          <button type="button" id="regCalNext" aria-label="다음 달">›</button>
+        </div>
+        <div class="regcalw">
+          <span class="sun">일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span class="sat">토</span>
+        </div>
+        <div class="regcalgrid" id="regCalGrid"></div>
+      </div>
     </div>
 
-    <div class="reglab">시작 날짜</div>
-    <input id="regFrom" class="inp" type="date" style="width:100%">
+    <!-- 매주 — 고른 요일 개수가 계 주 몇 회인지를 정한다 (일곱 개 다 골라도 된다) -->
+    <div id="regWeekBox">
+      <div class="reglab">요일 <span class="cnt" id="regDowCnt"></span></div>
+      <div class="dowpick" id="regDow">
+        <button type="button" class="sun" data-w="0">일</button>
+        <button type="button" data-w="1">월</button>
+        <button type="button" data-w="2">화</button>
+        <button type="button" data-w="3">수</button>
+        <button type="button" data-w="4">목</button>
+        <button type="button" data-w="5">금</button>
+        <button type="button" class="sat" data-w="6">토</button>
+      </div>
+    </div>
 
-    <div class="reglab">적용 기간</div>
-    <div class="setseg" id="regSpan">
-      <button type="button" data-m="1">1개월</button>
-      <button type="button" data-m="3">3개월</button>
-      <button type="button" data-m="6">6개월</button>
-      <button type="button" data-m="12">12개월</button>
+    <!-- 매월 — 매달 같은 날짜에 모인다. 칸은 app.js 가 1~31 로 채운다 -->
+    <div id="regMonBox">
+      <div class="reglab">날짜 <span class="cnt" id="regDomCnt"></span></div>
+      <div class="dompick" id="regDom"></div>
+      <div class="sub" style="margin-top:6px; font-size:.72rem;">그 달에 없는 날짜(예: 2월 31일)는 건너뜁니다.</div>
+    </div>
+
+    <!-- 일별은 날짜를 직접 골랐으므로 시작·기간을 따로 물지 않는다 -->
+    <div id="regRangeBox">
+      <div class="reglab">시작 날짜</div>
+      <input id="regFrom" class="inp" type="date" style="width:100%">
+
+      <div class="reglab">적용 기간</div>
+      <div class="setseg" id="regSpan">
+        <button type="button" data-m="1">1개월</button>
+        <button type="button" data-m="3">3개월</button>
+        <button type="button" data-m="6">6개월</button>
+        <button type="button" data-m="12">12개월</button>
+      </div>
     </div>
 
     <div class="regprev" id="regPrev"></div>
     <div class="msg" id="regMsg"></div>
     <button class="sbtn" id="regApply" style="width:100%; margin-top:12px;">정기전 등록</button>
-    <div class="sub" style="margin-top:8px; font-size:.75rem;">적용 기간 안에 이미 등록된 정기전은 새 일정으로 대체됩니다.</div>
+    <div class="sub" style="margin-top:8px; font-size:.75rem;">고른 범위 안에 이미 등록된 정기전은 새 일정으로 대체됩니다.</div>
   </div>
 </div>
 
