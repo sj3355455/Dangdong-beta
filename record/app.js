@@ -631,11 +631,12 @@ const colsFor = m => m==='통합' ? COLS_ALL : (m==='2인'||m==='팀전') ? COLS
 const defSort = m => m==='통합' ? 'avgAvg' : 'winRate';
 const cell = (p, c) => p[c.k]==null ? '—' : (c.fmt ? c.fmt(p[c.k]) : p[c.k]);
 // 값이 낮을수록 잘한 지표. 표에서 제목을 처음 눌렀을 때와 포디움의 1등이 여기에 달려 있다.
-// (기복 = 경기별 에버리지 변동폭이라 낮을수록 안정적이다)
-const bestIsLow = k => k==='avgRank' || k==='foulRate' || k==='volatility';
-// 포디움에 올릴 지표 — 승률·에버리지·평균 타수·득점률·하이런만. 표(COLS)의 순서를 따라간다.
+// (기복 = 경기별 에버리지 변동폭이라 낮을수록 안정적이다.
+//  평균 인터벌 = 한 타석에 쓴 시간이라 짧을수록 빠르게 친 것이다)
+const bestIsLow = k => k==='avgRank' || k==='foulRate' || k==='volatility' || k==='avgInterval';
+// 포디움에 올릴 지표 — 승률·에버리지·평균 타수·득점률·하이런·평균 인터벌. 표(COLS)의 순서를 따라간다.
 // 승률은 모드마다 열 키가 다르다(통합 adjRate / 나머지 winRate).
-const PODIUM_KEYS = ['adjRate','winRate','avgAvg','streakAvg','hitRate','bestHr'];
+const PODIUM_KEYS = ['adjRate','winRate','avgAvg','streakAvg','hitRate','bestHr','avgInterval'];
 const podiumCols = COLS => COLS.filter(c => PODIUM_KEYS.includes(c.k));
 let rankMode='통합', sortKey='avgAvg', sortAsc=false;
 let rankView='table';   // 'table' | 'podium' — 순위 탭 안에서 표/포디움 전환
@@ -963,7 +964,10 @@ function renderRank(){
       <button class="p-view ${rankView==='podium'?'on':''}" data-v="podium">포디움</button>
     </div>`;
 
-  const note = rankView==='podium' ? '지표를 고르면 그 기준으로 세웁니다.'
+  const note = rankView==='podium'
+    ? '지표를 고르면 그 기준으로 세웁니다.'
+      // 인터벌만 방향이 거꾸로다 — 왜 값이 작은 사람이 1등인지 한 줄로 알려 준다
+      + (sortKey==='avgInterval' ? ' <b>평균 인터벌</b>은 짧을수록 1등입니다.' : '')
     : (rankMode==='3인'||rankMode==='4인')
       ? '표 제목을 누르면 정렬됩니다. · <b>평균순위</b>는 동순위를 분수로 계산합니다(공동 2등 = 2.5등).'
       : '표 제목을 누르면 그 기준으로 정렬됩니다.';
