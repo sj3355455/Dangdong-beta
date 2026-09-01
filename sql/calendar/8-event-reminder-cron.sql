@@ -39,13 +39,17 @@ begin
     'dangdong-event-reminder',
     '0 1 * * *',
     format(
+      -- pg_net 은 비동기다 — 이 select 는 요청을 걸어 두고 바로 끝나고, 응답은 뒤에
+      -- net._http_response 로 들어온다. 기본 5초는 여러 기기에 푸시를 돌리기엔 짧아서 넉넉히 준다
+      -- (짧아도 발송 자체는 되지만 응답이 timeout 으로 남아 결과를 확인할 수 없다).
       $cmd$select net.http_post(
         url := %L,
         headers := jsonb_build_object(
           'Content-Type', 'application/json',
           'Authorization', 'Bearer ' || %L
         ),
-        body := '{}'::jsonb
+        body := '{}'::jsonb,
+        timeout_milliseconds := 30000
       )$cmd$, fn_url, service_key)
   );
 
@@ -55,10 +59,13 @@ end $$;
 -- ── 확인·정리용 ──────────────────────────────────────────────
 -- 걸린 예약 보기:
 --   select jobid, jobname, schedule, active from cron.job where jobname = 'dangdong-event-reminder';
--- 최근 실행 결과 보기 (실패하면 여기 남는다):
+-- 크론이 돌았는지 보기 (요청을 걸었는지까지만 — 성공/실패는 아래 응답을 봐야 한다):
 --   select start_time, status, return_message from cron.job_run_details
 --    where jobid = (select jobid from cron.job where jobname = 'dangdong-event-reminder')
 --    order by start_time desc limit 10;
+-- 함수가 뭐라고 답했는지 보기 (pg_net 은 비동기라 결과가 여기 따로 쌓인다):
+--   select created, status_code, content from net._http_response order by created desc limit 5;
+--   → status_code 200 에 content 가 {"target":...,"sent":N,...} 이면 정상
 -- 예약 끄기:
 --   select cron.unschedule('dangdong-event-reminder');
 --
