@@ -92,6 +92,9 @@ table.rank tbody tr:hover td.rk,table.rank tbody tr:hover td.name{background:var
 /* 표 위쪽 도구 줄 — 왼쪽에 보기 전환·지표, 오른쪽 끝에 정기전 토글 */
 .toolrow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:8px 0 0}
 .toolrow .push{margin-left:auto}
+/* 오른쪽 끝에 나란히 붙는 필터 버튼 묶음 (최소 경기 수 · 정기전) — 좁은 폭에선 같이 접힌다 */
+.toolrow .tgrp{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.toolrow .tgrp .push{margin-left:0}   /* 묶음 안에서는 이미 오른쪽 끝이라 밀 필요가 없다 */
 /* 붙어 있는 전환 버튼 (표 | 포디움) */
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;flex:0 0 auto}
 .seg button{padding:5px 13px;border:none;background:var(--card);color:var(--muted);

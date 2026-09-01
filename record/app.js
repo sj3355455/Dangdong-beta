@@ -27,6 +27,13 @@ const EVT_ICON = '⭐';   // 정기전 표시. 🏆 는 우승 표시로 이미 
 let RAW_EVENTS = [];
 let clubOnly = false;
 let HAS_EVENTS = true;   // DB에 event_id 컬럼이 있는지 (없으면 필터 UI를 숨긴다)
+
+// ── 최소 경기 수 필터 (순위 탭) ──
+// 한두 판만 친 사람이 에버리지·승률 맨 위에 올라오는 걸 걸러내는 용도.
+// 데이터를 다시 집계하지 않고 이미 뽑힌 순위 줄만 걸러낸다 — 지금 보고 있는 모드의
+// 경기 수(통합이면 통산, 3인전이면 3인전 경기 수)를 기준으로 한다.
+const MIN_GAMES_STEPS = [1, 3, 5, 10];   // 버튼을 누를 때마다 이 순서로 돌아간다
+let minGames = 1;                        // 1 = 제한 없음
 const evtLabel = e => e ? ((e.round_no ? `제${e.round_no}회 정기전` : '정기전') + ' (' + ddmy(e.event_date) + ')') : '';
 const evtById = id => RAW_EVENTS.find(e => String(e.id) === String(id)) || null;
 
@@ -97,6 +104,22 @@ function eventRowHtml(cls){
 function bindEventSel(el, cls, onChange){
   const btn = el.querySelector('.'+cls+'-evt');
   if (btn) btn.onclick = () => { clubOnly = !clubOnly; onChange(); };
+}
+// 최소 경기 수 버튼 — 누를 때마다 1 → 3 → 5 → 10 → 1 로 돈다.
+// 셀렉트가 아니라 버튼인 이유는 옆의 정기전 토글과 생김새·조작을 맞추기 위해서다.
+const minGamesLabel = () => minGames > 1 ? `✓ 🎯 ${minGames}경기 이상` : '🎯 경기 수 무관';
+function minGamesBtnHtml(cls){
+  return `<button class="mbtn ${cls}-min ${minGames > 1 ? 'on' : ''}"
+      title="이 경기 수 이상 친 선수만 순위에 올립니다">${minGamesLabel()}</button>`;
+}
+function bindMinGames(el, cls, onChange){
+  const btn = el.querySelector('.'+cls+'-min');
+  if (!btn) return;
+  btn.onclick = () => {
+    const i = MIN_GAMES_STEPS.indexOf(minGames);
+    minGames = MIN_GAMES_STEPS[(i + 1) % MIN_GAMES_STEPS.length];
+    onChange();
+  };
 }
 
 let fullProcessCache = null;
@@ -833,6 +856,7 @@ function podiumCanvas(rows, rankOf, COLS){
   text(col.t, cx, 128, font(800, 38), C.text, 'center');
   const parts = [rankMode === '통합' ? '통산 기준' : rankMode + '전'];
   if (clubOnly) parts.push(EVT_ICON + ' 정기전만');
+  if (minGames > 1) parts.push(minGames + '경기 이상');
   parts.push((rankFrom || rankTo) ? `${ddmy(rankFrom) || '처음'} ~ ${ddmy(rankTo) || '오늘'}` : '전체 기간');
   text(parts.join('  ·  '), cx, 172, font(500, 17), C.muted, 'center');
 
@@ -959,7 +983,9 @@ function renderRank(){
   // 포디움은 올릴 수 있는 지표가 정해져 있다. 표에서 다른 열로 정렬해 둔 채 넘어왔으면
   // (이름순 포함) 그 모드의 기본 지표로 되돌린다.
   if(rankView==='podium' && !PODIUM_KEYS.includes(sortKey)){ sortKey = defSort(rankMode); sortAsc = bestIsLow(sortKey); }
-  const rows = rankRows(rankMode).sort((a,b)=>{
+  // 최소 경기 수 — 집계는 그대로 두고 순위에 올릴 줄만 걸러낸다. 여기서 p.games 는
+  // 지금 보고 있는 모드의 경기 수다(rankRows 가 모드별 성적을 펼쳐 준다).
+  const rows = rankRows(rankMode).filter(p => (p.games || 0) >= minGames).sort((a,b)=>{
     let x=a[sortKey], y=b[sortKey], r;
     if(x==null && y==null) r = 0;
     else if(x==null) return 1;    // 값이 없는 사람은 정렬 방향과 무관하게 항상 아래로
@@ -998,7 +1024,10 @@ function renderRank(){
   }).join('');
   let inner;
   if(rows.length===0){
-    inner = `<div class="empty">아직 ${rankMode==='통합'?'':rankMode+'전 '}기록이 없습니다</div>`;
+    // 필터로 다 걸러진 것과 기록 자체가 없는 것은 다른 상황이라 안내를 나눈다
+    inner = minGames > 1
+      ? `<div class="empty">${rankMode==='통합'?'':rankMode+'전 '}${minGames}경기 이상 친 선수가 없습니다</div>`
+      : `<div class="empty">아직 ${rankMode==='통합'?'':rankMode+'전 '}기록이 없습니다</div>`;
   } else if(rankView==='podium'){
     inner = podiumHtml(rows, rankOf, COLS);
   } else {
@@ -1042,7 +1071,7 @@ function renderRank(){
   const el = $(`<div class="card">
       <div style="margin-bottom:14px;">
         ${rangeRowHtml('p-period', rankFrom, rankTo, modeSel)}
-        <div class="toolrow">${viewBtns}${eventRowHtml('p-period')}</div>
+        <div class="toolrow">${viewBtns}<div class="push tgrp">${minGamesBtnHtml('p-period')}${eventRowHtml('p-period')}</div></div>
         ${metricSel}
       </div>
       ${inner}
@@ -1063,6 +1092,8 @@ function renderRank(){
   el.querySelector('.p-period-from').onchange = applyRankRange;
   el.querySelector('.p-period-to').onchange = applyRankRange;
   bindEventSel(el, 'p-period', () => { DATA = getFilteredData(); refreshRankSub(); show('rank'); });
+  // 최소 경기 수는 집계(DATA)를 바꾸지 않으므로 다시 그리기만 하면 된다
+  bindMinGames(el, 'p-period', () => show('rank'));
 
   el.querySelector('.p-mode').onchange = (e) => {
     rankMode = e.target.value;
