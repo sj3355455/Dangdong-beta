@@ -11,7 +11,7 @@
  *  - 그 외 정적 자산(아이콘·매니페스트): 캐시 우선 + 백그라운드 갱신
  *  - 외부 출처(Supabase API 등): 가로채지 않음
  */
-const VERSION = 'v276';
+const VERSION = 'v278';
 // 배포 경로를 자동 감지 → 같은 코드가 /Dangdong/(본 앱)·/Dangdong-beta/(테스트)에서 그대로 동작.
 const BASE = new URL('.', self.location).pathname;   // 예: '/Dangdong/' 또는 '/Dangdong-beta/'
 const CACHE = 'dangdong' + BASE + VERSION;           // 스코프별 캐시 이름 분리(같은 origin이라 겹치면 안 됨)
@@ -121,11 +121,16 @@ self.addEventListener('notificationclick', e => {
       const base = { icon: BASE + 'icons/icon-192.png', badge: BASE + 'icons/icon-192.png',
                      tag: e.notification.tag, data };
       try {
-        // 서버가 저장한 값으로 문구를 만든다 — 누른 것과 저장된 것이 어긋나면 여기서 드러나야 한다
+        // 서버가 저장한 값으로 문구를 만든다 — 누른 것과 저장된 것이 어긋나면 여기서 드러나야 한다.
+        // 어긋났다면 조용히 넘기지 않고 무엇이 어긋났는지 그대로 보여 준다(기기마다 알림 버튼의
+        // action 값이 다르게 오는 경우가 있어, 사용자가 원인을 짚어 줄 수 있어야 한다).
         const saved = await sendRsvp(data, act);
+        const ok = saved === act;
         await self.registration.showNotification(
-          saved === 'yes' ? '✅ 참석으로 표시했습니다' : '❌ 불참으로 표시했습니다',
-          { ...base, body: e.notification.body || '' });
+          !ok ? '⚠️ 누른 것과 다르게 저장됐습니다'
+              : saved === 'yes' ? '✅ 참석으로 표시했습니다' : '❌ 불참으로 표시했습니다',
+          { ...base, body: ok ? (e.notification.body || '')
+              : `누른 값: ${act} / 저장된 값: ${saved} — 캘린더에서 다시 골라 주세요.` });
       } catch (err) {
         // 실패를 조용히 삼키면 눌렀는데 표가 없는 상태가 된다 → 캘린더에서 직접 고르도록 안내한다
         await self.registration.showNotification('표를 남기지 못했습니다', {
