@@ -11,7 +11,7 @@
  *  - 그 외 정적 자산(아이콘·매니페스트): 캐시 우선 + 백그라운드 갱신
  *  - 외부 출처(Supabase API 등): 가로채지 않음
  */
-const VERSION = 'v274';
+const VERSION = 'v275';
 // 배포 경로를 자동 감지 → 같은 코드가 /Dangdong/(본 앱)·/Dangdong-beta/(테스트)에서 그대로 동작.
 const BASE = new URL('.', self.location).pathname;   // 예: '/Dangdong/' 또는 '/Dangdong-beta/'
 const CACHE = 'dangdong' + BASE + VERSION;           // 스코프별 캐시 이름 분리(같은 origin이라 겹치면 안 됨)
@@ -103,6 +103,10 @@ async function sendRsvp(data, status){
     try { const b = await res.json(); m = b.message || b.hint || ''; } catch (_) {}
     throw new Error(m || ('오류 ' + res.status));
   }
+  // 서버가 실제로 저장한 값을 그대로 돌려준다(RPC 반환값). 확인 문구는 이걸로 띄운다 —
+  // '내가 누른 것'으로 띄우면 엉뚱하게 저장돼도 눈치채지 못한다.
+  try { const v = await res.json(); return typeof v === 'string' ? v : status; }
+  catch (_) { return status; }
 }
 
 self.addEventListener('notificationclick', e => {
@@ -117,9 +121,10 @@ self.addEventListener('notificationclick', e => {
       const base = { icon: BASE + 'icons/icon-192.png', badge: BASE + 'icons/icon-192.png',
                      tag: e.notification.tag, data };
       try {
-        await sendRsvp(data, act);
+        // 서버가 저장한 값으로 문구를 만든다 — 누른 것과 저장된 것이 어긋나면 여기서 드러나야 한다
+        const saved = await sendRsvp(data, act);
         await self.registration.showNotification(
-          act === 'yes' ? '✅ 참석으로 표시했습니다' : '❌ 불참으로 표시했습니다',
+          saved === 'yes' ? '✅ 참석으로 표시했습니다' : '❌ 불참으로 표시했습니다',
           { ...base, body: e.notification.body || '' });
       } catch (err) {
         // 실패를 조용히 삼키면 눌렀는데 표가 없는 상태가 된다 → 캘린더에서 직접 고르도록 안내한다
