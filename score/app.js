@@ -1,5 +1,6 @@
 import { sbFetch, sbAuth } from '../record/supabase.js';
-import { registerSW, getTheme, applyTheme, LS_THEME, initTeamModal } from '../record/common.js';
+import { registerSW, getTheme, applyTheme, LS_THEME, initTeamModal,
+         pushAttach, pushDetach, pushSaveSub } from '../record/common.js';
 
 const $ = s => document.querySelector(s);
 const show = id => document.querySelectorAll('.screen').forEach(el => el.style.display = el.id === id ? 'flex' : 'none');
@@ -92,6 +93,9 @@ $('#btnAuth').onclick = async () => {
     await loadMembers();
     upsertMember(auth.uid, auth.name);
     queueFlush();
+    // 이 기기에 알림 권한이 이미 있으면 구독을 이 계정으로 다시 붙인다 (권한을 새로 묻지는 않는다).
+    // 기다리지 않는다 — 로그인 화면 넘어가는 걸 붙잡을 이유가 없다.
+    pushAttach(auth.uid);
     syncSetup();
     show('setup');
     if (joinFailed) {
@@ -416,8 +420,11 @@ function normalizeMyBall(){
 function syncSetup(modeChanged = false){
   normalizeMyBall();
   const lo = $('#btnLogout');
-  if (lo) lo.onclick = () => {
+  if (lo) lo.onclick = async () => {
     if (!confirm('처음 화면으로 돌아갈까요?')) return;
+    // 알림 구독은 계정에 묶인다 — 끊지 않고 나가면 다음 사람이 로그인해도
+    // 알림의 참/불참 버튼은 이전 계정 이름으로 투표한다. auth 를 지우기 전에 끊는다.
+    await pushDetach();
     auth = null; localStorage.removeItem(LS_AUTH);
     localStorage.removeItem(LS_TEAM); currentTeam = null; myTeams = [];
     exitFS(); show('auth');
@@ -1543,9 +1550,11 @@ registerSW();
  * 본 앱에서는 아래 -beta 검사에 걸려 UI 자체가 뜨지 않는다.
  * 게다가 푸시 구독은 서비스워커 스코프(/Dangdong-beta/)에 묶이므로,
  * 설령 코드가 본 앱에 올라가더라도 서로 다른 구독이라 알림이 섞일 수 없다.
- * 보내는 쪽은 저장소 밖의 로컬 스크립트: ~/Documents/dangdong-push/send.js
+ * 보내는 쪽은 Supabase Edge Function — 모임은 notify-meetup, 정기전 이틀 전은 notify-event.
+ * (저장소 밖 ~/Documents/dangdong-push/send.js 는 손으로 쏘는 예비 수단)
  */
-const VAPID_PUBLIC = 'BJO7jjlFWFhPntIIWsmk0NTUpW67axk-3ikmxIt9OoXZIHjVx88dFUqhL_0OxBMvpeVyLdsrn65A8VpOK0KUwF0';
+// 구독을 만들고 지우는 일 자체는 공통 모듈이 맡는다(pushAttach/pushDetach/pushSaveSub) —
+// 로그인·로그아웃에서도 같은 동작이 필요해서다. 여기는 설정의 스위치 UI만 본다.
 (function initPush(){
   const row = $('#setPushRow'), btn = $('#setPush');
   if (!row || !btn) return;
@@ -1553,29 +1562,8 @@ const VAPID_PUBLIC = 'BJO7jjlFWFhPntIIWsmk0NTUpW67axk-3ikmxIt9OoXZIHjVx88dFUqhL_
   if (!location.pathname.includes('-beta') || !supported) return;   // 본 앱·미지원 브라우저는 조용히 숨긴다
   row.style.display = '';
 
-  // VAPID 공개키(base64url) → subscribe() 가 요구하는 Uint8Array
-  const b64ToU8 = s => {
-    const raw = atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g,'+').replace(/_/g,'/'));
-    return Uint8Array.from(raw, c => c.charCodeAt(0));
-  };
   const mark = on => btn.classList.toggle('on', !!on);
-  const device = (navigator.userAgent.match(/iPhone|iPad|Android|Windows|Macintosh/) || ['기타'])[0];
-
-  const saveSub = async sub => {
-    const j = sub.toJSON();
-    await sbFetch('/rest/v1/push_subscriptions_beta', {
-      method: 'POST',
-      headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },   // 같은 기기면 새 행 대신 갱신
-      body: JSON.stringify({
-        endpoint: j.endpoint, p256dh: j.keys.p256dh, auth_key: j.keys.auth,
-        user_id: auth ? auth.uid : null, label: device, scope: location.pathname
-      })
-    });
-  };
-  const dropSub = endpoint => sbFetch(
-    '/rest/v1/push_subscriptions_beta?endpoint=eq.' + encodeURIComponent(endpoint),
-    { method: 'DELETE', headers: { Prefer: 'return=minimal' } }
-  ).catch(()=>{});   // 실패해도 구독은 해지된다 — 죽은 주소는 send.js 가 410 받고 정리한다
+  const uid = () => auth ? auth.uid : null;
 
   // 스위치는 추측하지 않고 "이 기기에 구독이 살아 있는가"를 그대로 비춘다.
   // 설정을 열 때마다 다시 확인한다 — 페이지 로드 때 한 번만 읽으면 껐다 켠 뒤 옛 상태가 남는다.
@@ -1585,7 +1573,8 @@ const VAPID_PUBLIC = 'BJO7jjlFWFhPntIIWsmk0NTUpW67axk-3ikmxIt9OoXZIHjVx88dFUqhL_
       const sub = await reg.pushManager.getSubscription();
       const on = !!sub && Notification.permission === 'granted';
       mark(on);
-      if (on) saveSub(sub).catch(()=>{});   // 표에 행이 빠져 있으면 조용히 되살린다
+      // 표에 행이 빠졌거나 계정이 바뀌었으면 조용히 지금 계정으로 맞춘다
+      if (on) pushSaveSub(sub, uid()).catch(()=>{});
     } catch (_) { mark(false); }
   };
   syncPush();
@@ -1595,10 +1584,8 @@ const VAPID_PUBLIC = 'BJO7jjlFWFhPntIIWsmk0NTUpW67axk-3ikmxIt9OoXZIHjVx88dFUqhL_
     btn.disabled = true;
     try {
       const reg = await navigator.serviceWorker.ready;
-      let sub = await reg.pushManager.getSubscription();
-      if (sub) {                                    // 켜져 있으면 → 끄기
-        await dropSub(sub.endpoint);
-        await sub.unsubscribe();
+      if (await reg.pushManager.getSubscription()) {          // 켜져 있으면 → 끄기
+        await pushDetach();
         mark(false); toast('알림을 껐습니다');
         return;
       }
@@ -1606,10 +1593,8 @@ const VAPID_PUBLIC = 'BJO7jjlFWFhPntIIWsmk0NTUpW67axk-3ikmxIt9OoXZIHjVx88dFUqhL_
         toast('브라우저에서 알림이 차단돼 있어요 — 기기 설정에서 허용해 주세요'); return;
       }
       if (await Notification.requestPermission() !== 'granted') { toast('알림 권한이 없어 켜지 못했습니다'); return; }
-      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(VAPID_PUBLIC) });
-      // 표에 못 넣으면 구독도 되돌린다 — 스위치는 켜졌는데 보낼 주소는 없는 상태를 만들지 않는다.
-      try { await saveSub(sub); }
-      catch (e) { await sub.unsubscribe().catch(()=>{}); throw e; }
+      // pushAttach 는 표에 못 넣으면 false 를 준다 — 스위치만 켜지고 보낼 주소는 없는 상태를 만들지 않는다
+      if (!await pushAttach(uid())) { toast('알림을 켜지 못했습니다. 잠시 뒤 다시 시도해 주세요'); syncPush(); return; }
       mark(true); toast('알림을 켰습니다');
     } catch (e) {
       toast('알림 설정 실패: ' + (e && e.message || e));

@@ -353,6 +353,78 @@ export function registerSW(){
   }).catch(() => {});
 }
 
+/* ══ 알림 구독을 계정에 붙였다 떼기 ═══════════════════════════════════
+   푸시 구독은 '기기'에 남는데 로그인 계정은 바뀐다. 둘을 이어 두지 않으면
+   알림의 [참석]/[불참] 버튼이 이전 계정 이름으로 투표한다 — 그 버튼은 로그인 토큰을
+   쓸 수 없어서 구독 주소(endpoint)로 사람을 찾기 때문이다(rsvp_by_endpoint).
+   그래서 로그아웃할 때 구독을 끊고, 로그인할 때 지금 계정으로 다시 붙인다.
+
+   점수판·기록실·캘린더 어디서 로그아웃해도 같아야 하므로 공통 모듈에 둔다.
+   켜고 끄는 스위치 UI 자체는 점수판 설정에만 있다(score/app.js 의 initPush). */
+export const VAPID_PUBLIC = 'BJO7jjlFWFhPntIIWsmk0NTUpW67axk-3ikmxIt9OoXZIHjVx88dFUqhL_0OxBMvpeVyLdsrn65A8VpOK0KUwF0';
+
+// 테스트 앱에서만 쓴다 — 본 앱 경로에서는 아래 함수들이 전부 아무 일도 하지 않는다
+const pushUsable = () => 'serviceWorker' in navigator && 'PushManager' in window
+  && 'Notification' in window && location.pathname.includes('-beta');
+
+// VAPID 공개키(base64url) → subscribe() 가 요구하는 Uint8Array
+const b64ToU8 = s => {
+  const raw = atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, c => c.charCodeAt(0));
+};
+const deviceLabel = () => (navigator.userAgent.match(/iPhone|iPad|Android|Windows|Macintosh/) || ['기타'])[0];
+
+/* 주소록에 이 기기를 적어 둔다. endpoint 가 기본키라 같은 기기면 새 행 대신 갱신된다 —
+   계정이 바뀌었을 때 user_id 가 지금 계정으로 덮어써지는 게 이 함수의 요점이다. */
+export async function pushSaveSub(sub, uid){
+  const j = sub.toJSON();
+  await sbFetch('/rest/v1/push_subscriptions_beta', {
+    method: 'POST',
+    headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({
+      endpoint: j.endpoint, p256dh: j.keys.p256dh, auth_key: j.keys.auth,
+      user_id: uid || null, label: deviceLabel(), scope: location.pathname
+    })
+  });
+}
+
+/* 로그인 직후 — 알림 권한이 이미 허용돼 있을 때만 구독을 만들어 지금 계정으로 붙인다.
+   여기서 권한을 새로 묻지 않는 이유: 맥락 없이 뜨는 권한 창은 대개 거부되고, 한 번 거부되면
+   브라우저가 다시 묻지 못하게 막아 버린다. 처음 켜는 건 설정의 스위치가 맡는다.
+   돌려주는 값 = 지금 이 기기가 구독 중인가. */
+export async function pushAttach(uid){
+  if (!pushUsable() || Notification.permission !== 'granted') return false;
+  let made = null;                       // 이번 호출에서 새로 만든 구독 (되돌릴 때만 쓴다)
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = made = await reg.pushManager.subscribe({
+      userVisibleOnly: true, applicationServerKey: b64ToU8(VAPID_PUBLIC) });
+    await pushSaveSub(sub, uid);
+    return true;
+  } catch(e){
+    // 표에 못 넣었는데 구독만 살아 있으면 '보낼 주소를 서버가 모르는 기기'가 된다 → 되돌린다.
+    // 원래 있던 구독은 건드리지 않는다 (계정만 다시 붙이려던 것이지 끄려던 게 아니다).
+    if (made) await made.unsubscribe().catch(()=>{});
+    return false;
+  }
+}
+
+/* 로그아웃 직전 — 주소록에서 지우고 구독도 해지한다.
+   지우기를 먼저 하는 이유: 해지부터 하면 endpoint 를 잃어 어느 행을 지울지 알 수 없게 된다.
+   실패해도 로그아웃은 그대로 진행한다 — 죽은 주소는 보내는 쪽이 410 을 받고 정리한다. */
+export async function pushDetach(){
+  if (!pushUsable()) return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (!sub) return;
+    await sbFetch('/rest/v1/push_subscriptions_beta?endpoint=eq.' + encodeURIComponent(sub.endpoint),
+      { method: 'DELETE', headers: { Prefer: 'return=minimal' } }).catch(()=>{});
+    await sub.unsubscribe();
+  } catch(e){}
+}
+
 // ── 팀 설정 모달 (팀 참가 / 팀 만들기 / 팀장: 코드·이름 변경·팀원 내보내기) ──
 // ctx 로 앱별 차이만 주입한다:
 //   getAuth()            현재 로그인 정보

@@ -1,6 +1,7 @@
 import { sbFetch } from './supabase.js';
 import { registerSW, getTheme, applyTheme, LS_THEME, initTeamModal,
-         ymd, todayYmd, ddmy, rangeRowHtml, bindRangePicker, syncRangeDisp } from './common.js';
+         ymd, todayYmd, ddmy, rangeRowHtml, bindRangePicker, syncRangeDisp,
+         pushDetach } from './common.js';
 
 let DATA = { updated: '', players: [], games: [] };
 let RAW_GAMES = [];
@@ -2353,8 +2354,10 @@ function show(v){
   if(logoutBtn){
     if(auth){
       logoutBtn.style.display = '';
-      logoutBtn.onclick = () => {
+      logoutBtn.onclick = async () => {
         if(!confirm('로그아웃할까요? 처음 화면으로 돌아갑니다.')) return;
+        // 알림 구독은 계정에 묶인다 — 끊고 나가야 다음 사람의 알림 투표가 내 이름으로 가지 않는다
+        await pushDetach();
         try { localStorage.removeItem(LS_AUTH); localStorage.removeItem(LS_TEAM); } catch(e){}
         location.href = '../score/';
       };

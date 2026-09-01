@@ -15,7 +15,7 @@
 // 자세한 정책은 저장소 루트의 sql/calendar/ 참고 (1,2,4,5,7,8 을 순서대로 실행).
 import { sbFetch } from '../record/supabase.js';
 import { registerSW, getTheme, applyTheme, LS_THEME, initTeamModal,
-         shiftDay, openDayPicker } from '../record/common.js';
+         shiftDay, openDayPicker, pushDetach } from '../record/common.js';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
@@ -1634,8 +1634,10 @@ $('#dsPlanPick').onkeydown = e => {
 $('#dsSave').onclick = saveEvent;
 $('#dsDel').onclick = delEvent;
 
-$('#btnLogout').onclick = () => {
+$('#btnLogout').onclick = async () => {
   if (!confirm('로그아웃할까요?')) return;
+  // 알림 구독은 계정에 묶인다 — 끊고 나가야 다음 사람의 알림 투표가 내 이름으로 가지 않는다
+  await pushDetach();
   try { localStorage.removeItem(LS_AUTH); localStorage.removeItem(LS_TEAM); } catch(e){}
   location.href = '../score/';
 };
