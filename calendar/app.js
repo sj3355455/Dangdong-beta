@@ -1,11 +1,18 @@
-// 당동 캘린더 — 정기전 일정 · 경기 판수 · 모임 투표
+// 당동 캘린더 — 정기전 일정 · 경기 판수 · 참석 투표
 //
-// 모임 투표: "8/25 5시 메카당구장" 처럼 모임 하나를 띄우고 참/불참을 받는다.
-//   · 만들면 알림을 켜 둔 팀원에게 푸시가 간다 (Supabase Edge Function notify-meetup).
+// 참석 투표는 두 가지에 붙는다. 화면에서는 같은 카드로 보이고 코드도 tallyHtml/rsvp 를 함께 쓴다.
+//   · 모임   "8/25 5시 메카당구장" 처럼 누구나 띄우는 번개.  meetups / meetup_rsvps
+//   · 정기전 팀장이 지정한 팀의 공식 일정.                   club_events / event_rsvps
+// 표를 하나로 합치지 않은 이유는 정기전이 회차 일괄 등록·팀장 전용 수정이라는 고유한 흐름을
+// 갖기 때문이다. 대신 집계 함수(meetups_in / club_events_in)가 같은 모양을 돌려준다.
+//
+// 알림:
+//   · 모임을 만들면 그 자리에서 팀원에게 푸시가 간다 (Edge Function notify-meetup).
+//   · 정기전은 이틀 전 아침에 자동으로 간다 (notify-event + pg_cron. sql/calendar/8-…).
 //   · 안드로이드는 알림에 붙은 [참석]/[불참] 버튼으로 바로 답한다. iOS 는 알림 버튼을
-//     지원하지 않아서, 누르면 캘린더가 그 모임을 연 채 뜨고 거기서 고른다.
-//   · 참석자는 이름까지 보이고 불참은 인원수만 나간다 — 서버 함수(meetups_in)가 정하는 범위다.
-// 자세한 정책은 저장소 루트의 sql/calendar/ 참고 (1,2,4,5 를 순서대로 실행).
+//     지원하지 않아서, 누르면 캘린더가 그 날을 연 채 뜨고 거기서 고른다.
+//   · 참석자는 이름까지 보이고 불참은 인원수만 나간다 — 서버 함수가 정하는 범위다.
+// 자세한 정책은 저장소 루트의 sql/calendar/ 참고 (1,2,4,5,7,8 을 순서대로 실행).
 import { sbFetch } from '../record/supabase.js';
 import { registerSW, getTheme, applyTheme, LS_THEME, initTeamModal,
          shiftDay, openDayPicker } from '../record/common.js';
@@ -26,7 +33,9 @@ let isTeamLeader = false;
 let cur = new Date(); cur.setDate(1); cur.setHours(0, 0, 0, 0);
 
 // 이번 달 데이터 — 모두 'YYYY-MM-DD' 를 키로 쓴다
-let events = {};    // 날짜 → { id, note } — 회차는 담지 않는다 (eventSeq 가 순서로 계산한다)
+let events = {};    // 날짜 → { id, note, yes_names[], yes_cnt, no_cnt, my_status } — 회차는 담지 않는다
+                    // (eventSeq 가 순서로 계산한다). 투표 넷은 club_events_in 이 채워 준다 —
+                    // 7-event-votes.sql 을 아직 안 돌린 서버에서는 없을 수 있으므로 늘 기본값을 두고 읽는다.
 let gameCnt = {};   // 날짜 → 경기 판수
 let meetups = {};   // 날짜 → [모임...]  각 모임은 meetups_in 이 준 그대로
                     // { id, meet_time, place, note, created_by, creator_name,
@@ -39,6 +48,7 @@ let myPlans = [];   // 내가 등록한 일정 [{ id, name, start_date, end_date
 // 달마다가 아니라 팀 전체를 한 번에 받아 둔다 — 날짜만 받으므로 몇 년치라도 가볍다.
 let eventSeq = null;   // 'YYYY-MM-DD' → 회차(1부터)
 let seqTeam = null;    // 그 표가 어느 팀 것인지
+let canVoteEvents = false;   // 서버에 club_events_in 이 있는가 (없으면 정기전 투표 칸을 아예 안 그린다)
 let loading = false;
 let loadErr = '';   // 이번 달 데이터를 못 불러온 이유 (화면에 그대로 띄운다)
 
@@ -146,6 +156,23 @@ function applyCache(c){
   loadErr = c.loadErr;
 }
 
+// 정기전 + 그 참석 현황. club_events_in 이 참석자 이름·인원수·내 표까지 한 번에 준다.
+// 7-event-votes.sql 을 아직 안 돌린 서버에서는 이 함수가 없다 → 예전처럼 표를 직접 읽어
+// 정기전 자체는 그대로 보이게 한다 (투표 칸만 안 뜬다). 캘린더가 통째로 죽으면 안 된다.
+async function loadEvents(d1, d2){
+  try {
+    const rows = await sbFetch('/rest/v1/rpc/club_events_in', {
+      method: 'POST', body: JSON.stringify({ t: currentTeam, d1, d2 })
+    });
+    if (Array.isArray(rows)) { canVoteEvents = true; return rows; }
+  } catch(e){
+    if (!(e && (e.status === 404 || e.status === 400))) throw e;   // 권한·통신 문제는 감추지 않는다
+  }
+  canVoteEvents = false;
+  return await sbFetch(`/rest/v1/club_events?select=id,event_date,note&team_id=eq.${currentTeam}`
+        + `&event_date=gte.${d1}&event_date=lte.${d2}`);
+}
+
 async function loadMonth(force = false){
   if (!currentTeam) { clearMonth(); eventSeq = null; seqTeam = null; return; }
   const cacheKey = getMonthKey();
@@ -160,8 +187,7 @@ async function loadMonth(force = false){
   const nextMonth = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
 
   const [ev, games, mts, spans, plans] = await Promise.allSettled([
-    sbFetch(`/rest/v1/club_events?select=id,event_date,note&team_id=eq.${currentTeam}`
-          + `&event_date=gte.${d1}&event_date=lte.${d2}`),
+    loadEvents(d1, d2),
     sbFetch(`/rest/v1/games?select=played_at&team_id=eq.${currentTeam}`
           + `&played_at=gte.${d1}T00:00:00&played_at=lt.${ymd(nextMonth)}T00:00:00`),
     sbFetch('/rest/v1/rpc/meetups_in', { method: 'POST', body: JSON.stringify({ t: currentTeam, d1, d2 }) }),
@@ -233,7 +259,11 @@ function cellR3Html(key){
   // 오늘 친 판수를 바로 띄우면 아직 유효한 모임 정보와 자리를 다툰다 → 판수는 날짜가 지난 뒤부터.
   if (isPast(key)) return g ? `<span class="gchip">${g}판</span>` : '';
   const ms = meetsOn(key);
-  if (!ms.length) return '';
+  // 모임이 없는 정기전 날이면 그 자리에 정기전 참석 인원을 띄운다 (회차는 둘째 줄이 맡는다)
+  if (!ms.length) {
+    const ev = events[key];
+    return (ev && ev.yes_cnt) ? `<span class="mtchip">참석 ${ev.yes_cnt}명</span>` : '';
+  }
   // 모임이 둘 이상이면 시각 대신 개수를 보여 준다 — 좁은 칸에 둘 다 넣으면 아무것도 안 읽힌다
   const head = ms.length > 1 ? `모임 ${ms.length}` : (timeShort(ms[0].meet_time) || '모임');
   const yes = ms.reduce((n, m) => n + (m.yes_cnt || 0), 0);
@@ -452,23 +482,28 @@ function bindBar(){
   if (nw) nw.onclick = () => openDay(todayStr(), { focusNew: true });
 }
 
-// 다가오는 모임 — 오늘 이후로 잡힌 것들. 달력을 훑지 않아도 다음 약속이 바로 보이게.
+// 다가오는 일정 — 오늘 이후로 잡힌 모임과 정기전. 달력을 훑지 않아도 다음 약속이 바로 보이게.
+// 정기전도 참석을 받는 자리가 됐으므로 여기에 함께 세운다. 날짜순으로 섞어 놓아야
+// "다음에 뭐가 있더라"에 한 번에 답이 된다.
 function upNextHtml(){
-  const rows = Object.keys(meetups)
-    .filter(k => !isPast(k))
-    .sort()
-    .flatMap(k => meetsOn(k).map(m => ({ k, m })))
-    .slice(0, 5);
-  if (!rows.length) return '';
+  const rows = [];
+  for (const k of Object.keys(meetups)) if (!isPast(k))
+    for (const m of meetsOn(k)) rows.push({ k, sub: m.place || '', when: timeText(m.meet_time), o: m });
+  if (canVoteEvents) for (const k of Object.keys(events)) if (!isPast(k)) {
+    const n = roundOf(k);
+    rows.push({ k, sub: n ? `🏅 제${n}회 정기전` : '🏅 정기전', when: null, o: events[k] });
+  }
+  rows.sort((a, b) => a.k < b.k ? -1 : a.k > b.k ? 1 : 0);
+  const top = rows.slice(0, 5);
+  if (!top.length) return '';
   return `<div class="card">
-    <div style="font-weight:700; margin-bottom:6px;">🎱 다가오는 모임</div>
-    ${rows.map(({ k, m }) => {
-      const when = timeText(m.meet_time);
-      const mine = m.my_status === 'yes' ? ' ✅' : m.my_status === 'no' ? ' ❌' : '';
+    <div style="font-weight:700; margin-bottom:6px;">🎱 다가오는 일정</div>
+    ${top.map(({ k, sub, when, o }) => {
+      const mine = o.my_status === 'yes' ? ' ✅' : o.my_status === 'no' ? ' ❌' : '';
       return `<button type="button" class="upnext" data-d="${k}">
         <span class="d">${label(k)}${when ? ' ' + esc(when) : ''}</span>
-        <span class="p">${esc(m.place || '')}</span>
-        <span class="n${m.yes_cnt ? '' : ' none'}">${m.yes_cnt || 0}명${mine}</span>
+        <span class="p">${esc(sub)}</span>
+        <span class="n${o.yes_cnt ? '' : ' none'}">${o.yes_cnt || 0}명${mine}</span>
       </button>`;
     }).join('')}
   </div>`;
@@ -587,12 +622,18 @@ function openDay(key, opts = {}){
   const ev = events[key], g = gameCnt[key] || 0;
   $('#dsTitle').textContent = label(key);
 
+  // 정기전 카드가 뜨는 날이면 회차·메모는 그 카드가 말한다 → 여기서 또 적지 않는다
+  const evInCard = !!ev && canVoteEvents;
   const bits = [];
-  if (ev) { const n = roundOf(key); bits.push(n ? `🏅 제${n}회 정기전` : '🏅 정기전'); }
-  if (ev && ev.note) bits.push(esc(ev.note));
+  if (ev && !evInCard) {
+    const n = roundOf(key);
+    bits.push(n ? `🏅 제${n}회 정기전` : '🏅 정기전');
+    if (ev.note) bits.push(esc(ev.note));
+  }
   if (g) bits.push(`🎱 ${g}판`);
-  $('#dsInfo').innerHTML = bits.join(' · ') || '기록된 일정이 없습니다.';
+  $('#dsInfo').innerHTML = bits.join(' · ') || (evInCard ? '' : '기록된 일정이 없습니다.');
 
+  renderEventCard(key);
   renderMeetups(key);
   renderAgg(key);
 
@@ -650,6 +691,53 @@ function setForm(which){          // 'mt' | 'plan' | null
   if (which) (mt ? $('#dsMt') : $('#dsPlan')).scrollIntoView({ block: 'nearest' });
 }
 
+// 참석자 이름 줄 + 참/불참 버튼. 정기전 카드와 모임 카드가 똑같이 쓴다 —
+// club_events_in 과 meetups_in 이 같은 모양(yes_names / yes_cnt / no_cnt / my_status)을 돌려주기 때문이다.
+// kind 는 눌렀을 때 어느 표에 쓸지를 가른다 ('mt' = 모임, 'ev' = 정기전).
+function tallyHtml(o, kind, past){
+  const names = o.yes_names || [];
+  return `<div class="mtwho">
+      <span class="lb">참석</span>${names.length
+        ? `<span class="yes">${names.map(esc).join(', ')}</span>`
+        : `<span class="none">아직 없음</span>`}
+      ${o.no_cnt ? `<span class="nocnt"> · 불참 ${o.no_cnt}명</span>` : ''}
+    </div>
+    ${past ? '' : `<div class="tally">
+      <button type="button" class="o${o.my_status === 'yes' ? ' on' : ''}"
+              data-rsvp="yes" data-kind="${kind}" data-id="${esc(o.id)}" aria-pressed="${o.my_status === 'yes'}">
+        <b>${o.yes_cnt || 0}</b><span>✅ 참석</span></button>
+      <button type="button" class="x${o.my_status === 'no' ? ' on' : ''}"
+              data-rsvp="no" data-kind="${kind}" data-id="${esc(o.id)}" aria-pressed="${o.my_status === 'no'}">
+        <b>${o.no_cnt || 0}</b><span>❌ 불참</span></button>
+    </div>`}`;
+}
+
+const bindTally = box => box.querySelectorAll('[data-rsvp]').forEach(b => {
+  b.onclick = () => rsvp(b.dataset.kind, b.dataset.id, b.dataset.rsvp);
+});
+
+// ══ 정기전 카드 ══
+// 정기전도 하나의 모임으로 친다 — 모임 카드와 같은 모양으로 그리고 참/불참을 같은 자리에서 받는다.
+// 다른 점은 만든 사람이 아니라 '팀의 공식 일정'이라 지우는 단추가 없다는 것뿐이다
+// (정기전을 지우는 건 아래 팀장 전용 칸이 맡는다).
+function renderEventCard(key){
+  const box = $('#dsEvent');
+  const ev = events[key];
+  // 서버에 club_events_in 이 없으면 투표 자체가 불가능하다 → 카드를 그리지 않고
+  // 예전처럼 #dsInfo 한 줄로만 알린다 (openDay 가 판단한다).
+  if (!ev || !canVoteEvents) { box.innerHTML = ''; return; }
+
+  const n = roundOf(key);
+  box.innerHTML = `<div class="mtcard ev">
+      <div class="mthd">
+        <div class="mtwhen">🏅 ${n ? '제' + n + '회 정기전' : '정기전'}</div>
+      </div>
+      ${ev.note ? `<div class="mtnote">${esc(ev.note)}</div>` : ''}
+      ${tallyHtml(ev, 'ev', isPast(key))}
+    </div>`;
+  bindTally(box);
+}
+
 // ══ 모임 카드 ══
 // 참석자는 이름, 불참은 인원수. 이 범위는 서버(meetups_in)가 정하는 것이고
 // 여기서는 받은 것을 그대로 그릴 뿐이다 — 불참자 이름은 애초에 오지 않는다.
@@ -660,14 +748,14 @@ function renderMeetups(key){
   const past = isPast(key);
 
   if (!ms.length) {
-    box.innerHTML = past ? '' :
+    // 정기전 카드가 이미 떠 있으면 '모임이 없다'는 안내는 군더더기다 — 그날 할 일은 이미 있다
+    box.innerHTML = (past || (events[key] && canVoteEvents)) ? '' :
       `<div class="sub" style="margin-top:14px;">아직 잡힌 모임이 없습니다.</div>`;
     return;
   }
 
   box.innerHTML = ms.map(m => {
     const when = timeText(m.meet_time);
-    const names = (m.yes_names || []);
     const mine = auth && m.created_by === auth.uid;
     return `<div class="mtcard${mine ? ' mine' : ''}">
       <div class="mthd">
@@ -678,26 +766,11 @@ function renderMeetups(key){
       </div>
       ${m.note ? `<div class="mtnote">${esc(m.note)}</div>` : ''}
       <div class="mtby">${esc(m.creator_name || '알 수 없음')}님이 만듦</div>
-      <div class="mtwho">
-        <span class="lb">참석</span>${names.length
-          ? `<span class="yes">${names.map(esc).join(', ')}</span>`
-          : `<span class="none">아직 없음</span>`}
-        ${m.no_cnt ? `<span class="nocnt"> · 불참 ${m.no_cnt}명</span>` : ''}
-      </div>
-      ${past ? '' : `<div class="tally">
-        <button type="button" class="o${m.my_status === 'yes' ? ' on' : ''}"
-                data-rsvp="yes" data-id="${esc(m.id)}" aria-pressed="${m.my_status === 'yes'}">
-          <b>${m.yes_cnt || 0}</b><span>✅ 참석</span></button>
-        <button type="button" class="x${m.my_status === 'no' ? ' on' : ''}"
-                data-rsvp="no" data-id="${esc(m.id)}" aria-pressed="${m.my_status === 'no'}">
-          <b>${m.no_cnt || 0}</b><span>❌ 불참</span></button>
-      </div>`}
+      ${tallyHtml(m, 'mt', past)}
     </div>`;
   }).join('');
 
-  box.querySelectorAll('[data-rsvp]').forEach(b => {
-    b.onclick = () => rsvp(b.dataset.id, b.dataset.rsvp);
-  });
+  bindTally(box);
   box.querySelectorAll('.mtdel').forEach(b => {
     b.onclick = () => delMeetup(b.dataset.id);
   });
@@ -719,14 +792,22 @@ function msg(t, kind){
 }
 
 // ══ 참석 / 불참 ══
+// 모임과 정기전이 같은 길을 쓴다 — 다른 건 어느 표에 쓰느냐뿐이라 여기 한 곳에 모아 둔다.
+const RSVP_TABLE = {
+  mt: { table: 'meetup_rsvps', fk: 'meetup_id', redraw: renderMeetups },
+  ev: { table: 'event_rsvps',  fk: 'event_id',  redraw: renderEventCard }
+};
+
 // 같은 쪽을 다시 누르면 표를 거둔다. 화면부터 바꾸고 저장은 뒤따르게 해서
 // 누른 순간 반응이 오도록 한다 — 실패하면 되돌린다.
-async function rsvp(id, status){
+async function rsvp(kind, id, status){
   const auth = getAuth();
   if (!auth || !currentTeam) return msg('로그인이 필요합니다.', 'err');
+  const T = RSVP_TABLE[kind];
   const key = openKey;
-  const m = meetsOn(key).find(x => x.id === id);
-  if (!m || isPast(key)) return;
+  // 정기전은 하루에 하나뿐이라 날짜로 바로 찾는다. 모임은 같은 날 여럿일 수 있어 id 로 고른다.
+  const m = kind === 'ev' ? events[key] : meetsOn(key).find(x => x.id === id);
+  if (!T || !m || m.id !== id || isPast(key)) return;
 
   const prev = m.my_status || null;
   const next = status === prev ? null : status;
@@ -744,31 +825,31 @@ async function rsvp(id, status){
     m.yes_names = next === 'yes' ? [...others, myName].sort() : others;
   }
   vibTick();
-  renderMeetups(key);
+  T.redraw(key);
   msg('저장 중...');
 
   try {
     if (next) {
-      await sbFetch('/rest/v1/meetup_rsvps?on_conflict=meetup_id,user_id', {
+      await sbFetch(`/rest/v1/${T.table}?on_conflict=${T.fk},user_id`, {
         method: 'POST',
         headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-        body: JSON.stringify({ meetup_id: id, user_id: auth.uid, status: next,
+        body: JSON.stringify({ [T.fk]: id, user_id: auth.uid, status: next,
                                updated_at: new Date().toISOString() })
       });
     } else {
-      await sbFetch(`/rest/v1/meetup_rsvps?meetup_id=eq.${id}&user_id=eq.${auth.uid}`, { method: 'DELETE' });
+      await sbFetch(`/rest/v1/${T.table}?${T.fk}=eq.${id}&user_id=eq.${auth.uid}`, { method: 'DELETE' });
     }
     msg(next === 'yes' ? '참석으로 저장했습니다.' : next === 'no' ? '불참으로 저장했습니다.' : '표를 거뒀습니다.', 'ok');
     updateMonthCache();
     render();
     // 이름 목록은 내 것만 추측해서 넣은 상태다 — 서버 값으로 맞춘다
     await refresh(true);
-    if ($('#daySheet').classList.contains('on')) renderMeetups(key);
+    if ($('#daySheet').classList.contains('on')) T.redraw(key);
   } catch(e){
     bump(next, -1); bump(prev, +1);
     m.my_status = prev;
     m.yes_names = beforeNames;
-    renderMeetups(key);
+    T.redraw(key);
     updateMonthCache();
     msg('저장하지 못했습니다: ' + errText(e), 'err');
   }
@@ -1567,29 +1648,32 @@ document.addEventListener('visibilitychange', () => {
 
 // ══ 알림에서 들어온 경우 ══
 // 알림 버튼(참석/불참)은 안드로이드에만 있다. iOS 는 알림을 누르면 여기로 오는데,
-// 그때 ?meetup=<id> 를 달고 온다 → 그 모임이 있는 날짜의 상세를 열어 준다.
+// 그때 ?meetup=<id> 또는 ?event=<id> 를 달고 온다 → 그 날짜의 상세를 열어 준다.
 async function openFromLink(){
-  const id = new URLSearchParams(location.search).get('meetup');
-  if (!id) return;
+  const q = new URLSearchParams(location.search);
+  const mtId = q.get('meetup'), evId = q.get('event');
+  if (!mtId && !evId) return;
   // 주소창에 남겨 두면 새로고침마다 시트가 다시 열린다 → 한 번 쓰고 지운다
   try { history.replaceState(null, '', location.pathname); } catch(e){}
   try {
-    const rows = await sbFetch('/rest/v1/rpc/meetup_one', {
-      method: 'POST', body: JSON.stringify({ m: id })
-    });
-    const m = Array.isArray(rows) ? rows[0] : null;
-    if (!m) return;
-    // 다른 팀·다른 달의 모임일 수 있다 — 그 팀과 그 달로 옮겨 놓고 연다
-    if (m.team_id && m.team_id !== currentTeam) {
-      currentTeam = m.team_id; tSet(currentTeam);
+    const rows = mtId
+      ? await sbFetch('/rest/v1/rpc/meetup_one',     { method: 'POST', body: JSON.stringify({ m: mtId }) })
+      : await sbFetch('/rest/v1/rpc/club_event_one', { method: 'POST', body: JSON.stringify({ e: evId }) });
+    const r = Array.isArray(rows) ? rows[0] : null;
+    if (!r) return;
+    const date = r.meet_date || r.event_date;
+    if (!date) return;
+    // 다른 팀·다른 달의 일정일 수 있다 — 그 팀과 그 달로 옮겨 놓고 연다
+    if (r.team_id && r.team_id !== currentTeam) {
+      currentTeam = r.team_id; tSet(currentTeam);
       const me = myTeams.find(t => t.id === currentTeam);
       isTeamLeader = !!(me && me.is_admin);
       renderTeamBar();
     }
-    const [y, mo] = m.meet_date.split('-').map(Number);
+    const [y, mo] = date.split('-').map(Number);
     cur = new Date(y, mo - 1, 1);
     await refresh(true);
-    openDay(m.meet_date);
+    openDay(date);
   } catch(e){ /* 못 찾으면 그냥 이번 달을 보여 준다 */ }
 }
 

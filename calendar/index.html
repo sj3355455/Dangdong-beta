@@ -151,6 +151,9 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
 /* 한 날짜에 모임이 여럿일 수 있다 (낮 당구 / 밤 뒤풀이). 그래서 카드를 쌓는다. */
 .mtcard{margin-top:14px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--bg)}
 .mtcard.mine{border-color:var(--accent-soft)}
+/* 정기전 카드 — 모임과 같은 얼개지만 팀의 공식 일정이라 테두리로 구분해 준다 */
+.mtcard.ev{border-color:var(--accent);border-width:1.5px}
+.mtcard.ev .mtwhen{color:var(--accent)}
 .mthd{display:flex;align-items:flex-start;gap:8px}
 .mtwhen{flex:1 1 auto;min-width:0;font-weight:800;font-size:1.02rem;line-height:1.35;word-break:keep-all}
 .mtwhen .pl{display:block;font-weight:600;font-size:.88rem;color:var(--muted);margin-top:2px}
@@ -421,6 +424,9 @@ body{margin:0;padding:calc(56px + var(--sat)) 16px calc(16px + var(--sab));backg
       <button class="closex" id="dsClose">&times;</button>
     </div>
     <div class="sub" id="dsInfo"></div>
+
+    <!-- 이 날이 정기전이면 모임과 같은 모양의 카드 하나. 참석/불참을 여기서 받는다 (app.js 가 그린다) -->
+    <div id="dsEvent"></div>
 
     <!-- 이 날 잡힌 모임들. 카드마다 참석/불참 버튼과 참석자 이름이 붙는다 (app.js 가 그린다) -->
     <div id="dsMeetups"></div>
