@@ -17,6 +17,8 @@
 --   · 내 표  → 나에게만.
 --   클라이언트는 event_rsvps 를 직접 읽지 못한다(RLS). 공개 범위의 유일한 통로는
 --   아래 club_events_in / club_event_one 두 함수다.
+--
+-- 5-meetups.sql 도 먼저 실행해 두세요 — 앱은 두 표를 같은 카드로 함께 그립니다.
 -- ═══════════════════════════════════════════════════════════════
 
 do $$
@@ -150,53 +152,8 @@ $$;
 
 grant execute on function public.club_event_one(uuid) to authenticated;
 
--- ─────────────────────────────────────────────────────────────
--- 4) 알림에서 바로 누르는 참/불참
---    모임의 rsvp_by_endpoint 와 같은 얼개다 — 서비스워커는 로그인 토큰을 쓸 수 없고
---    자기 푸시 구독 주소(endpoint)만 안다. 그 주소가 곧 "이 기기 = 이 사람"이라는 증표다.
--- ─────────────────────────────────────────────────────────────
-drop function if exists public.event_rsvp_by_endpoint(text, uuid, text);
-create function public.event_rsvp_by_endpoint(p_endpoint text, p_event uuid, p_status text)
-returns text
-language plpgsql
-volatile
-security definer
-set search_path = public
-as $$
-declare
-  uid uuid;
-  tid uuid;
-begin
-  if p_status not in ('yes','no') then
-    raise exception '참/불참 값이 올바르지 않습니다: %', p_status;
-  end if;
-
-  select s.user_id into uid
-  from public.push_subscriptions_beta s
-  where s.endpoint = p_endpoint;
-
-  if uid is null then
-    raise exception '이 기기의 구독 정보를 찾지 못했습니다. 앱에서 알림을 다시 켜 주세요.';
-  end if;
-
-  select e.team_id into tid from public.club_events e where e.id = p_event;
-  if tid is null then
-    raise exception '정기전을 찾지 못했습니다.';
-  end if;
-  if not exists (select 1 from public.team_members tm where tm.team_id = tid and tm.user_id = uid) then
-    raise exception '이 팀의 팀원이 아닙니다.';
-  end if;
-
-  insert into public.event_rsvps(event_id, user_id, status, updated_at)
-  values (p_event, uid, p_status, now())
-  on conflict (event_id, user_id)
-  do update set status = excluded.status, updated_at = now();
-
-  return p_status;
-end $$;
-
--- 알림 버튼은 로그인 토큰 없이 호출된다 → anon 도 실행할 수 있어야 한다.
--- 신원 확인은 함수 안에서 endpoint 로 한다.
-grant execute on function public.event_rsvp_by_endpoint(text, uuid, text) to anon, authenticated;
+-- 알림 버튼으로 바로 투표하던 event_rsvp_by_endpoint 는 모임 쪽 rsvp_by_endpoint 와 함께
+-- 걷어냈다(2026-09-01). 이유는 5-meetups.sql · sw.js 의 설명 참고.
+-- 남아 있는 서버에서 걷어내는 건 9-drop-endpoint-rsvp.sql 이 맡는다.
 
 do $$ begin raise notice '정기전 투표 설치 완료 — 이틀 전 알림은 8-event-reminder-cron.sql'; end $$;

@@ -114,8 +114,7 @@ Deno.serve(async (req) => {
            meetup.note || '',
            creator?.display_name ? `${creator.display_name}님이 만듦` : ''].filter(Boolean).join('\n'),
     url: `${APP_URL}calendar/?meetup=${meetup.id}`,
-    tag: `meetup-${meetup.id}`,
-    meetupId: meetup.id
+    tag: `meetup-${meetup.id}`
   });
 
   webpush.setVapidDetails(APP_URL, PUB, PRIV);

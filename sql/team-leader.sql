@@ -3,9 +3,10 @@
 -- Supabase SQL Editor에 붙여넣고 Run. 멱등(여러 번 실행 안전).
 --
 -- 팀장 = team_members.is_admin = true (팀별). 팀 생성자가 자동으로 팀장.
--- 팀장의 권한은 딱 두 가지로 제한한다:
---   1) 초대 코드 변경  → regenerate_join_code(team_id)
---   2) 팀원 내보내기    → remove_member(team_id, user_id)
+-- 팀장의 권한은 딱 이만큼으로 제한한다:
+--   1) 초대 코드 조회·지정  → team_join_code(team_id) · set_join_code(team_id, code)
+--   2) 팀 이름 변경          → rename_team(team_id, name)
+--   3) 팀원 내보내기          → remove_member(team_id, user_id)
 -- 그 외 경기 수정·삭제·이름변경 같은 건 팀장에게 주지 않는다(전역 관리자만).
 -- ═══════════════════════════════════════════════════════════════
 
@@ -20,21 +21,12 @@ as $$
   )
 $$;
 
--- 1) 초대 코드 변경 (팀장만). 새 코드를 반환.
-create or replace function public.regenerate_join_code(p_team_id uuid)
-returns text
-language plpgsql security definer set search_path = public
-as $$
-declare new_code text;
-begin
-  if not public.is_team_leader(p_team_id) then raise exception 'not_authorized'; end if;
-  new_code := upper(substr(md5(gen_random_uuid()::text), 1, 4) || '-' || substr(md5(gen_random_uuid()::text), 5, 4));
-  update public.teams set join_code = new_code where id = p_team_id;
-  return new_code;
-end
-$$;
+-- 무작위 코드를 새로 뽑아 주던 regenerate_join_code 는 걷어냈다.
+-- 앱의 '변경' 버튼은 팀장이 직접 타이핑한 코드를 set_join_code 로 저장한다 —
+-- 외우기 쉬운 코드를 쓰려고 그렇게 바꾼 것이고, 그 뒤로 부르는 곳이 없었다.
+drop function if exists public.regenerate_join_code(uuid);
 
--- 2) 팀원 내보내기 (팀장만). 팀장 본인은 못 내보낸다.
+-- 1) 팀원 내보내기 (팀장만). 팀장 본인은 못 내보낸다.
 create or replace function public.remove_member(p_team_id uuid, p_user_id uuid)
 returns void
 language plpgsql security definer set search_path = public
@@ -55,7 +47,7 @@ as $$
   where t.id = p_team_id and public.is_team_leader(p_team_id)
 $$;
 
--- 3) 팀 이름 변경 (팀장만)
+-- 2) 팀 이름 변경 (팀장만)
 create or replace function public.rename_team(p_team_id uuid, new_name text)
 returns void
 language plpgsql security definer set search_path = public
@@ -70,7 +62,7 @@ begin
 end
 $$;
 
--- 4) 초대 코드 직접 지정 (팀장만). 다른 팀이 쓰는 코드면 거부.
+-- 3) 초대 코드 직접 지정 (팀장만). 다른 팀이 쓰는 코드면 거부.
 create or replace function public.set_join_code(p_team_id uuid, new_code text)
 returns text
 language plpgsql security definer set search_path = public
@@ -91,6 +83,5 @@ $$;
 grant execute on function public.is_team_leader(uuid) to authenticated;
 grant execute on function public.rename_team(uuid, text) to authenticated;
 grant execute on function public.set_join_code(uuid, text) to authenticated;
-grant execute on function public.regenerate_join_code(uuid) to authenticated;
 grant execute on function public.remove_member(uuid, uuid) to authenticated;
 grant execute on function public.team_join_code(uuid) to authenticated;

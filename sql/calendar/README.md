@@ -13,19 +13,23 @@ Supabase SQL Editor 는 긴 스크립트를 한 번에 붙여넣기 어려워서
 | 6 | `6-drop-day-votes.sql` | ⚠️ 옛 날짜별 O/X 투표(`day_votes`)를 지운다. **되돌릴 수 없음** |
 | 7 | `7-event-votes.sql` | **정기전 투표** — `event_rsvps` 표와 집계 함수 `club_events_in` |
 | 8 | `8-event-reminder-cron.sql` | 정기전 **이틀 전 알림** 예약 (pg_cron → Edge Function) |
+| 9 | `9-drop-endpoint-rsvp.sql` | 알림 버튼으로 투표하던 함수 둘을 걷어낸다 |
 
 전부 **여러 번 실행해도 안전**합니다(멱등). 순서를 건너뛰면 각 파일이 앞 단계가 없다고
 알려주고 멈추므로, 반쯤 만들어진 상태로 남지 않습니다.
 
-### 3번(`3-vote-counts.sql`)은 왜 없나
+**새로 까는 서버라면 6·9 는 건너뛰어도 됩니다** — 지울 게 애초에 안 생깁니다.
+이미 돌아가고 있는 서버에서만 필요한 청소 파일입니다.
 
-날짜마다 "그날 되나요?"를 칠해 두던 방식이 모임 투표로 바뀌면서 그 집계 함수가 필요 없어졌습니다.
-6번이 함수와 표를 함께 걷어냅니다. 1번·2번 파일에 남아 있는 `day_votes` 부분은
-이미 만들어진 서버에서는 그냥 무시되고, 6번을 돌리면 사라집니다.
+### 3번은 왜 없나
+
+날짜마다 "그날 되나요?"를 칠해 두던 방식이 모임 투표로 바뀌면서 그 집계 함수(`vote_counts`)가
+필요 없어졌습니다. 1·2번도 더 이상 `day_votes` 를 만들지 않고, 이미 만들어진 서버에서
+표와 함수를 함께 걷어내는 건 6번이 맡습니다.
 
 ## 앞서 실행해야 하는 것
 
-`../teams-setup.sql` → `../teams-rls.sql` → 여기(1, 2, 4, 5, 6, 7, 8) → (선택) `../event-games.sql`
+`../teams-setup.sql` → `../teams-rls.sql` → 여기(1, 2, 4, 5, 7, 8) → (선택) `../event-games.sql`
 
 알림까지 쓰려면 `../push-subscriptions-beta.sql` 도 실행해야 합니다.
 발송은 `../../supabase/functions/` 의 Edge Function 두 개가 맡습니다.

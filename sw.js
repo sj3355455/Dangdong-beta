@@ -11,7 +11,7 @@
  *  - 그 외 정적 자산(아이콘·매니페스트): 캐시 우선 + 백그라운드 갱신
  *  - 외부 출처(Supabase API 등): 가로채지 않음
  */
-const VERSION = 'v280';
+const VERSION = 'v281';
 // 배포 경로를 자동 감지 → 같은 코드가 /Dangdong/(본 앱)·/Dangdong-beta/(테스트)에서 그대로 동작.
 const BASE = new URL('.', self.location).pathname;   // 예: '/Dangdong/' 또는 '/Dangdong-beta/'
 const CACHE = 'dangdong' + BASE + VERSION;           // 스코프별 캐시 이름 분리(같은 origin이라 겹치면 안 됨)
@@ -60,8 +60,10 @@ self.addEventListener('message', e => {
  * 버튼 정의도 처음부터 옳았으므로, 기기가 action 값을 잘못 넘긴 것으로 본다.
  * 잘못된 표가 조용히 남는 것보다 한 번 더 누르는 게 낫다. iOS 는 원래 알림 버튼을
  * 지원하지 않아 이 방식이었고 문제가 없었다.
- * (되살리려면 showNotification 에 actions 를 주고, sql 의 rsvp_by_endpoint /
- *  event_rsvp_by_endpoint 를 부르는 처리를 notificationclick 에 다시 넣으면 된다)
+ * 서버 쪽 짝(rsvp_by_endpoint / event_rsvp_by_endpoint)도 함께 걷어냈다 —
+ * 아무도 부르지 않는데 anon 에게 열려 있는 문이었다(sql/calendar/9-drop-endpoint-rsvp.sql).
+ * 되살리려면 그 함수들을 다시 만들고, showNotification 에 actions 를 준 뒤
+ * notificationclick 에서 부르는 처리를 넣어야 한다 — git 이력에 셋 다 남아 있다.
  */
 
 self.addEventListener('push', e => {

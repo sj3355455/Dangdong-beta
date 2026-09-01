@@ -172,58 +172,9 @@ $$;
 
 grant execute on function public.meetup_one(uuid) to authenticated;
 
--- ─────────────────────────────────────────────────────────────
--- 알림에서 바로 누르는 참/불참
---
--- 서비스워커는 알림 버튼을 처리할 때 로그인 토큰을 쓸 수 없다 (localStorage 를 못 읽는다).
--- 대신 자기 푸시 구독 주소(endpoint)는 알고 있다. 그 주소가 곧 "이 기기 = 이 사람"이라는
--- 증표이므로, 여기서 주소로 사람을 찾아 표를 남긴다.
---
--- 그래서 endpoint 목록은 아무나 읽을 수 있으면 안 된다 —
--- push-subscriptions-beta.sql 에서 anon 의 SELECT 를 걷어낸 이유가 이것이다.
--- ─────────────────────────────────────────────────────────────
-drop function if exists public.rsvp_by_endpoint(text, uuid, text);
-create function public.rsvp_by_endpoint(p_endpoint text, p_meetup uuid, p_status text)
-returns text
-language plpgsql
-volatile
-security definer
-set search_path = public
-as $$
-declare
-  uid uuid;
-  tid uuid;
-begin
-  if p_status not in ('yes','no') then
-    raise exception '참/불참 값이 올바르지 않습니다: %', p_status;
-  end if;
-
-  select s.user_id into uid
-  from public.push_subscriptions_beta s
-  where s.endpoint = p_endpoint;
-
-  if uid is null then
-    raise exception '이 기기의 구독 정보를 찾지 못했습니다. 앱에서 알림을 다시 켜 주세요.';
-  end if;
-
-  select m.team_id into tid from public.meetups m where m.id = p_meetup;
-  if tid is null then
-    raise exception '모임을 찾지 못했습니다.';
-  end if;
-  if not exists (select 1 from public.team_members tm where tm.team_id = tid and tm.user_id = uid) then
-    raise exception '이 팀의 팀원이 아닙니다.';
-  end if;
-
-  insert into public.meetup_rsvps(meetup_id, user_id, status, updated_at)
-  values (p_meetup, uid, p_status, now())
-  on conflict (meetup_id, user_id)
-  do update set status = excluded.status, updated_at = now();
-
-  return p_status;
-end $$;
-
--- 알림 버튼은 로그인 토큰 없이 호출된다 → anon 도 실행할 수 있어야 한다.
--- 신원 확인은 함수 안에서 endpoint 로 한다.
-grant execute on function public.rsvp_by_endpoint(text, uuid, text) to anon, authenticated;
+-- 알림 [참석]/[불참] 버튼으로 바로 투표하던 rsvp_by_endpoint 는 걷어냈다(2026-09-01).
+-- 어떤 안드로이드 기기가 어느 버튼을 눌러도 두 번째 값을 보내 잘못된 표가 조용히 남았고,
+-- 알림에서 버튼 자체를 뺐기 때문이다(sw.js 의 설명 참고). 남아 있는 서버에서 걷어내는 건
+-- 9-drop-endpoint-rsvp.sql 이 맡는다.
 
 do $$ begin raise notice '모임 투표 설치 완료'; end $$;

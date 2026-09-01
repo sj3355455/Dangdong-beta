@@ -1,8 +1,8 @@
 -- ═══════════════════════════════════════════════════════════════
--- 당동 캘린더 [4/4] 일정 막대 함수 + 설치 점검
+-- 당동 캘린더 [4] 일정 막대 함수 + 설치 점검
 --
--- 1~3 을 먼저 실행하세요. 여러 번 실행해도 안전합니다.
--- 실행 결과(Messages)에 '캘린더 설치 완료' 가 보이면 끝입니다.
+-- 1·2 를 먼저 실행하세요. 여러 번 실행해도 안전합니다.
+-- 실행 결과(Messages)에 '캘린더 뼈대 설치 완료' 가 보이면 끝입니다.
 -- ═══════════════════════════════════════════════════════════════
 
 -- ─────────────────────────────────────────────────────────────
@@ -40,20 +40,17 @@ grant execute on function public.plan_spans(uuid, date, date) to authenticated;
 notify pgrst, 'reload schema';
 
 -- ─────────────────────────────────────────────────────────────
--- 자체 점검 — 1~4 가 다 들어갔는지 여기서 확인하고 끝낸다.
+-- 자체 점검 — 1·2·4 가 다 들어갔는지 여기서 확인한다.
+-- (모임·정기전 투표는 5·7번이 각자 점검한다)
 -- ─────────────────────────────────────────────────────────────
 do $$
 declare missing text := '';
 begin
   if to_regclass('public.club_events') is null then missing := missing || ' club_events'; end if;
-  if to_regclass('public.day_votes')  is null then missing := missing || ' day_votes';  end if;
   if to_regclass('public.day_plans')  is null then missing := missing || ' day_plans';  end if;
   if not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
                  where n.nspname = 'public' and p.proname = 'plan_spans')
     then missing := missing || ' plan_spans'; end if;
-  if not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-                 where n.nspname = 'public' and p.proname = 'vote_counts')
-    then missing := missing || ' vote_counts'; end if;
   if not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
                  where n.nspname = 'public' and p.proname = 'is_team_admin')
     then missing := missing || ' is_team_admin'; end if;
@@ -61,12 +58,12 @@ begin
   if missing <> '' then
     raise exception '설치가 덜 됐습니다. 빠진 것:% — 해당 파일을 다시 실행해 주세요.', missing;
   end if;
-  raise notice '캘린더 설치 완료 — club_events / day_votes / day_plans / vote_counts / plan_spans / is_team_admin 모두 확인';
+  raise notice '캘린더 뼈대 설치 완료 — club_events / day_plans / plan_spans / is_team_admin 확인. 다음은 5-meetups.sql';
 end $$;
 
 -- 설치 후 확인 쿼리 (선택)
 -- select p.proname, pg_get_function_arguments(p.oid)
 --   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
---  where n.nspname = 'public' and p.proname in ('vote_counts','plan_spans','is_member_of','is_team_admin');
+--  where n.nspname = 'public' and p.proname in ('plan_spans','is_member_of','is_team_admin');
 -- SQL Editor 는 service_role 이라 RLS 를 우회합니다. 익명성 검증은 앱에서 하세요.
 -- ═══════════════════════════════════════════════════════════════

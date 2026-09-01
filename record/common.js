@@ -31,7 +31,7 @@ export const shiftDay = (s, n) =>
   ymd(new Date(Number(s.slice(0, 4)), Number(s.slice(5, 7)) - 1, Number(s.slice(8, 10)) + n));
 
 // 기간을 한 줄로 요약. 한쪽이 비면 열린 구간으로 읽는다.
-export function rangeLabel(from, to, empty){
+function rangeLabel(from, to, empty){
   if (!from && !to) return empty || '전체 기간';
   if (from && to) return from === to ? ddmy(from) + ' 하루' : ddmy(from) + ' ~ ' + ddmy(to);
   if (from) return ddmy(from) + ' ~ 지금';
@@ -51,7 +51,7 @@ export function rangeRowHtml(cls, from, to, leftHtml, opt){
 }
 
 const DOW_KO = ['일','월','화','수','목','금','토'];
-export function openCalendar(opt){
+function openCalendar(opt){
   const lo = opt.min || '', hi = opt.max || '';        // '' = 제한 없음
   const today = todayYmd();
   const inBounds = s => (!lo || s >= lo) && (!hi || s <= hi);
@@ -72,16 +72,16 @@ export function openCalendar(opt){
       <div class="calhint cal-hint"></div>
       <div class="calgrid cal-dow">${DOW_KO.map((d,i)=>`<div class="caldow"${i===0?' style="color:#e5484d"':''}>${d}</div>`).join('')}</div>
       <div class="calgrid cal-days"></div>
-      <div class="calft">${opt.allowClear ? `<button class="cal-clear">${opt.clearLabel || '전체 기간'}</button>` : ''}<button class="cal-close">닫기</button></div>
+      <div class="calft">${opt.allowClear ? '<button class="cal-clear">전체 기간</button>' : ''}<button class="cal-close">닫기</button></div>
     </div>`;
   const q = s => mask.querySelector(s);
   const onKey = e => { if (e.key === 'Escape') close(); };
   // 닫기·배경·ESC 로 나갈 때 시작일만 골라 뒀으면 그것만이라도 확정한다.
-  // 종료가 빈 값이면 기록실은 "그날 이후 전체", 일정 등록은 "그 하루"로 읽는다(openEnded).
+  // 종료를 빈 값으로 넘기면 부르는 쪽이 "그날 이후 전체"로 읽는다.
   function close(){
     mask.remove();
     document.removeEventListener('keydown', onKey);
-    if (!committed && pend) { committed = true; opt.onCommit(pend, opt.openEnded === false ? pend : ''); }
+    if (!committed && pend) { committed = true; opt.onCommit(pend, ''); }
   }
   function commit(a, b){ committed = true; close(); opt.onCommit(a, b); }
   mask.onclick = e => { if (e.target === mask) close(); };
@@ -94,9 +94,8 @@ export function openCalendar(opt){
     // 그 방향으로 고를 수 있는 날이 하나도 없으면 넘기지 못하게 한다
     q('.cal-next').disabled = !!hi && ymd(new Date(y, m + 1, 1)) > hi;
     q('.cal-prev').disabled = !!lo && ymd(new Date(y, m, 0)) < lo;
-    const tail = opt.openEnded === false ? `그냥 닫으면 ${ddmy(pend)} 하루` : `그냥 닫으면 ${ddmy(pend)} 이후 전체`;
     q('.cal-hint').innerHTML = pend
-      ? `<b>종료일</b>을 고르세요 · ${tail}`
+      ? `<b>종료일</b>을 고르세요 · 그냥 닫으면 ${ddmy(pend)} 이후 전체`
       : '첫 번째가 <b>시작일</b>, 두 번째가 <b>종료일</b> · 위 <b>연·월</b>을 누르면 그 달 전체';
     // 고르는 중이면 방금 누른 날만, 아니면 확정된 기간을 보여 준다 (뒤집혀 있어도 자연스럽게)
     let a = pend || opt.from, b = pend ? '' : opt.to;
@@ -354,14 +353,14 @@ export function registerSW(){
 }
 
 /* ══ 알림 구독을 계정에 붙였다 떼기 ═══════════════════════════════════
-   푸시 구독은 '기기'에 남는데 로그인 계정은 바뀐다. 둘을 이어 두지 않으면
-   알림의 [참석]/[불참] 버튼이 이전 계정 이름으로 투표한다 — 그 버튼은 로그인 토큰을
-   쓸 수 없어서 구독 주소(endpoint)로 사람을 찾기 때문이다(rsvp_by_endpoint).
+   푸시 구독은 '기기'에 남는데 로그인 계정은 바뀐다. 둘을 이어 두지 않으면 이 폰이
+   여전히 이전 계정 것으로 남아, 그 계정이 속한 팀의 알림을 계속 받는다 — 팀을 옮기거나
+   폰을 빌려준 뒤에도 남의 팀 모임 알림이 울린다는 뜻이다.
    그래서 로그아웃할 때 구독을 끊고, 로그인할 때 지금 계정으로 다시 붙인다.
 
    점수판·기록실·캘린더 어디서 로그아웃해도 같아야 하므로 공통 모듈에 둔다.
    켜고 끄는 스위치 UI 자체는 점수판 설정에만 있다(score/app.js 의 initPush). */
-export const VAPID_PUBLIC = 'BJO7jjlFWFhPntIIWsmk0NTUpW67axk-3ikmxIt9OoXZIHjVx88dFUqhL_0OxBMvpeVyLdsrn65A8VpOK0KUwF0';
+const VAPID_PUBLIC = 'BJO7jjlFWFhPntIIWsmk0NTUpW67axk-3ikmxIt9OoXZIHjVx88dFUqhL_0OxBMvpeVyLdsrn65A8VpOK0KUwF0';
 
 // 테스트 앱에서만 쓴다 — 본 앱 경로에서는 아래 함수들이 전부 아무 일도 하지 않는다
 const pushUsable = () => 'serviceWorker' in navigator && 'PushManager' in window

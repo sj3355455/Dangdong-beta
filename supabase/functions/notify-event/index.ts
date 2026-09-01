@@ -144,8 +144,7 @@ Deno.serve(async (req) => {
       body: [dateText(ev.event_date), ev.note || '',
              `지금까지 참석 ${yesCnt || 0}명 · 참석 여부를 알려 주세요`].filter(Boolean).join('\n'),
       url: `${APP_URL}calendar/?event=${ev.id}`,
-      tag: `event-${ev.id}`,
-      eventId: ev.id
+      tag: `event-${ev.id}`
     });
 
     const gone: string[] = [];

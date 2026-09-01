@@ -47,9 +47,10 @@ create policy push_beta_delete on public.push_subscriptions_beta for delete to a
 
 -- ★ 목록 읽기는 아무에게도 열지 않는다.
 --
--- 알림의 참/불참 버튼은 endpoint 를 신원 증표로 쓴다 (sql/calendar/5-meetups.sql 의
--- rsvp_by_endpoint). 남의 endpoint 를 알면 그 사람 대신 투표할 수 있다는 뜻이라,
--- 목록이 새 나가면 안 된다. 그래서 SELECT 정책을 두지 않는다.
+-- endpoint 는 그 기기로 알림을 쏠 수 있는 주소다. 목록이 새 나가면 부원 전원의 폰에
+-- 알림을 밀어 넣을 수 있게 되므로, 남의 행은 아예 조회되지 않게 둔다.
+-- (endpoint 를 신원 증표로 삼아 투표하던 rsvp_by_endpoint 는 2026-09-01 에 걷어냈다 —
+--  sql/calendar/9-drop-endpoint-rsvp.sql)
 --
 -- 보내는 쪽은 RLS 를 통과하지 않는 service_role 로 읽는다:
 --   · Supabase Edge Function → 환경변수로 service_role 키가 자동 주입된다 (추가 작업 없음)

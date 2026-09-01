@@ -1,12 +1,11 @@
 -- ═══════════════════════════════════════════════════════════════
--- 당동 캘린더 [2/4] 권한 + RLS
+-- 당동 캘린더 [2] 권한 + RLS
 --
 -- 1-tables.sql 을 먼저 실행하세요. 여러 번 실행해도 안전합니다.
 --
 -- 익명성을 어떻게 지키는가:
---   day_votes 는 "내 표만 SELECT" 정책이라, 클라이언트는 남의 표를 아예 읽을 수 없다.
---   day_plans 도 마찬가지로 '내 일정'만 읽힌다.
---   화면에 보이는 인원수는 집계 함수(vote_counts / plan_spans)가 서버에서 세어 숫자만 돌려준다.
+--   day_plans 는 "내 일정만 SELECT" 정책이라, 클라이언트는 남의 일정을 아예 읽을 수 없다.
+--   화면에 보이는 인원수는 집계 함수(plan_spans)가 서버에서 세어 숫자만 돌려준다.
 --   즉 누가 무엇을 골랐는지는 앱 어디에서도 조회할 방법이 없다.
 -- ═══════════════════════════════════════════════════════════════
 
@@ -14,7 +13,6 @@ do $$
 declare missing text := '';
 begin
   if to_regclass('public.club_events') is null then missing := missing || ' club_events'; end if;
-  if to_regclass('public.day_votes')  is null then missing := missing || ' day_votes';  end if;
   if to_regclass('public.day_plans')  is null then missing := missing || ' day_plans';  end if;
   if missing <> '' then
     raise exception '먼저 1-tables.sql 을 실행해 주세요. 없는 표:% (search_path=%)',
@@ -23,11 +21,9 @@ begin
 end $$;
 
 grant select, insert, update, delete on public.club_events to authenticated;
-grant select, insert, update, delete on public.day_votes  to authenticated;
 grant select, insert, update, delete on public.day_plans  to authenticated;
 
 alter table public.club_events enable row level security;
-alter table public.day_votes  enable row level security;
 alter table public.day_plans  enable row level security;
 
 -- 일정: 표와 똑같이 '내 것'만 읽고 쓴다. 남의 일정은 조회 자체가 불가능하고,
@@ -63,20 +59,6 @@ create policy "admin edit event" on public.club_events
 create policy "admin drop event" on public.club_events
   for delete using (public.is_team_admin(team_id));
 
--- 투표: 오직 '내 표'만. 남의 표는 조회 자체가 불가능하다 → 익명 보장.
-drop policy if exists "read own vote"   on public.day_votes;
-drop policy if exists "add own vote"    on public.day_votes;
-drop policy if exists "edit own vote"   on public.day_votes;
-drop policy if exists "drop own vote"   on public.day_votes;
+-- 참/불참 투표는 모임(5-meetups.sql)·정기전(7-event-votes.sql)이 각자의 표와 정책으로 맡는다.
 
-create policy "read own vote" on public.day_votes
-  for select using (user_id = auth.uid());
-create policy "add own vote" on public.day_votes
-  for insert with check (user_id = auth.uid() and public.is_member_of(team_id));
-create policy "edit own vote" on public.day_votes
-  for update using (user_id = auth.uid())
-       with check (user_id = auth.uid() and public.is_member_of(team_id));
-create policy "drop own vote" on public.day_votes
-  for delete using (user_id = auth.uid());
-
-do $$ begin raise notice '[2/4] RLS 완료 — 다음은 3-vote-counts.sql'; end $$;
+do $$ begin raise notice '[2] RLS 완료 — 다음은 4-plan-spans.sql'; end $$;
