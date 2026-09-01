@@ -11,7 +11,7 @@
  *  - 그 외 정적 자산(아이콘·매니페스트): 캐시 우선 + 백그라운드 갱신
  *  - 외부 출처(Supabase API 등): 가로채지 않음
  */
-const VERSION = 'v279';
+const VERSION = 'v280';
 // 배포 경로를 자동 감지 → 같은 코드가 /Dangdong/(본 앱)·/Dangdong-beta/(테스트)에서 그대로 동작.
 const BASE = new URL('.', self.location).pathname;   // 예: '/Dangdong/' 또는 '/Dangdong-beta/'
 const CACHE = 'dangdong' + BASE + VERSION;           // 스코프별 캐시 이름 분리(같은 origin이라 겹치면 안 됨)
@@ -52,12 +52,17 @@ self.addEventListener('message', e => {
  * 구독은 서비스워커 스코프(BASE)에 묶이므로 본 앱(/Dangdong/)과 테스트 앱(/Dangdong-beta/)은
  * 애초에 서로 다른 구독이다 — 한쪽으로 보낸 알림이 다른 쪽에 갈 수 없다.
  *
- * 모임·정기전 투표 알림이면 알림 안에 [참석]/[불참] 버튼이 붙는다.
- * ※ 이 버튼은 안드로이드에서만 보인다. iOS 는 알림 버튼(actions)을 지원하지 않아서
- *   알림을 누르면 캘린더가 그 모임을 연 채로 뜨고, 거기서 고르게 된다.
+ * 투표 알림(모임·정기전)은 누르면 캘린더가 그 날을 연 채로 뜬다. 거기서 참/불참을 고른다.
+ *
+ * 알림에 [참석]/[불참] 버튼을 붙였던 적이 있는데 걷어냈다(2026-09-01).
+ * 어떤 안드로이드 기기에서 어느 버튼을 눌러도 두 번째 값('no')이 서버로 갔다 —
+ * 서버 함수는 받은 값을 그대로 저장하는 게 확인됐고(rsvp_by_endpoint), 이 파일의
+ * 버튼 정의도 처음부터 옳았으므로, 기기가 action 값을 잘못 넘긴 것으로 본다.
+ * 잘못된 표가 조용히 남는 것보다 한 번 더 누르는 게 낫다. iOS 는 원래 알림 버튼을
+ * 지원하지 않아 이 방식이었고 문제가 없었다.
+ * (되살리려면 showNotification 에 actions 를 주고, sql 의 rsvp_by_endpoint /
+ *  event_rsvp_by_endpoint 를 부르는 처리를 notificationclick 에 다시 넣으면 된다)
  */
-const SB_URL = 'https://ezwassqurbmzcjfmtjop.supabase.co';
-const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV6d2Fzc3F1cmJtemNqZm10am9wIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQyMjMxOTIsImV4cCI6MjA5OTc5OTE5Mn0.O6eHOO4-yxW7HVmNVjOkakrcoEeF5tORylhG1j79BeU';
 
 self.addEventListener('push', e => {
   let d = {};
@@ -70,91 +75,20 @@ self.addEventListener('push', e => {
     badge: BASE + 'icons/icon-192.png',
     tag: d.tag || 'dangdong',          // 같은 tag 는 알림이 쌓이지 않고 갱신된다
     renotify: true,
-    data: { url: d.url || (BASE + 'score/'),
-            meetupId: d.meetupId || null, eventId: d.eventId || null }
+    // url 하나면 된다 — 누르면 그리로 간다. 투표 알림의 url 은 보내는 쪽(Edge Function)이
+    // calendar/?meetup=<id> · calendar/?event=<id> 로 만들어 준다.
+    data: { url: d.url || (BASE + 'score/') }
   };
-  // 모임이든 정기전이든 참/불참을 받는 알림이면 버튼을 붙인다
-  if (d.meetupId || d.eventId) opts.actions = [
-    { action: 'yes', title: '✅ 참석' },
-    { action: 'no',  title: '❌ 불참' }
-  ];
 
   e.waitUntil(self.registration.showNotification(d.title || '당동', opts));
 });
 
-// 알림에서 참/불참을 눌렀을 때 — 앱을 열지 않고 서버에 바로 표를 남긴다.
-//
-// 서비스워커는 localStorage 를 못 읽어서 로그인 토큰을 쓸 수 없다. 대신 자기 푸시 구독
-// 주소(endpoint)를 알고 있고, 서버가 그 주소로 사람을 찾아 준다(rsvp_by_endpoint).
-// 모임(meetupId)과 정기전(eventId)은 표가 달라 부르는 함수도 다르다. 나머지 얼개는 같다.
-async function sendRsvp(data, status){
-  const sub = await self.registration.pushManager.getSubscription();
-  if (!sub) throw new Error('구독 정보가 없습니다');
-  const [fn, body] = data.meetupId
-    ? ['rsvp_by_endpoint',       { p_endpoint: sub.endpoint, p_meetup: data.meetupId, p_status: status }]
-    : ['event_rsvp_by_endpoint', { p_endpoint: sub.endpoint, p_event:  data.eventId,  p_status: status }];
-  const res = await fetch(SB_URL + '/rest/v1/rpc/' + fn, {
-    method: 'POST',
-    headers: { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  if (!res.ok) {
-    let m = '';
-    try { const b = await res.json(); m = b.message || b.hint || ''; } catch (_) {}
-    throw new Error(m || ('오류 ' + res.status));
-  }
-  // 서버가 실제로 저장한 값을 그대로 돌려준다(RPC 반환값). 확인 문구는 이걸로 띄운다 —
-  // '내가 누른 것'으로 띄우면 엉뚱하게 저장돼도 눈치채지 못한다.
-  try { const v = await res.json(); return typeof v === 'string' ? v : status; }
-  catch (_) { return status; }
-}
-
-/* 눌린 버튼을 'yes'/'no' 로 정리한다.
-   표준은 actions 에 적어 둔 action 값('yes'/'no')이 그대로 오는 것이지만, 일부 안드로이드
-   브라우저는 대신 버튼 제목('✅ 참석')이나 순번('0')을 넘긴다. 그대로 두면 아래 검사에
-   걸려 표가 남지 않거나 엉뚱한 쪽으로 샌다 → 제목·순번도 같은 뜻으로 받아 준다.
-   무엇으로도 못 읽으면 '' 을 주고, 그때는 투표하지 않고 앱을 연다(찍기보다 안 찍는 게 낫다). */
-function readAction(a){
-  if (a === 'yes' || a === 'no') return a;
-  if (typeof a !== 'string' || !a) return '';
-  if (a.includes('참석') || a === '0') return 'yes';
-  if (a.includes('불참') || a === '1') return 'no';
-  return '';
-}
-
+// 알림을 누르면: 이미 열려 있는 앱 창이 있으면 그리로, 없으면 새로 연다.
+// 투표 알림이면 url 이 calendar/?meetup=<id> · ?event=<id> 라 그 날 상세가 열린다.
 self.addEventListener('notificationclick', e => {
-  const data = e.notification.data || {};
-  const url = data.url || (BASE + 'score/');
-  const act = readAction(e.action);
+  const url = (e.notification.data || {}).url || (BASE + 'score/');
   e.notification.close();
 
-  // 버튼을 눌렀으면 표만 남기고 끝낸다 — 앱을 여는 건 오히려 방해다.
-  if ((act === 'yes' || act === 'no') && (data.meetupId || data.eventId)) {
-    e.waitUntil((async () => {
-      const base = { icon: BASE + 'icons/icon-192.png', badge: BASE + 'icons/icon-192.png',
-                     tag: e.notification.tag, data };
-      try {
-        // 서버가 저장한 값으로 문구를 만든다 — 누른 것과 저장된 것이 어긋나면 여기서 드러나야 한다.
-        // 어긋났다면 조용히 넘기지 않고 무엇이 어긋났는지 그대로 보여 준다(기기마다 알림 버튼의
-        // action 값이 다르게 오는 경우가 있어, 사용자가 원인을 짚어 줄 수 있어야 한다).
-        const saved = await sendRsvp(data, act);
-        const ok = saved === act;
-        await self.registration.showNotification(
-          !ok ? '⚠️ 누른 것과 다르게 저장됐습니다'
-              : saved === 'yes' ? '✅ 참석으로 표시했습니다' : '❌ 불참으로 표시했습니다',
-          { ...base, body: ok ? (e.notification.body || '')
-              : `누른 값: ${act} / 저장된 값: ${saved} — 캘린더에서 다시 골라 주세요.` });
-      } catch (err) {
-        // 실패를 조용히 삼키면 눌렀는데 표가 없는 상태가 된다 → 캘린더에서 직접 고르도록 안내한다
-        await self.registration.showNotification('표를 남기지 못했습니다', {
-          ...base, body: (err && err.message || '') + ' — 눌러서 캘린더에서 골라 주세요.'
-        });
-      }
-    })());
-    return;
-  }
-
-  // 알림 본문을 누르면: 이미 열려 있는 앱 창이 있으면 그리로, 없으면 새로 연다.
   e.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const c of wins) {
