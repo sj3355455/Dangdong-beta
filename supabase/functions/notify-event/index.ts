@@ -47,6 +47,28 @@ const addDays = (ymd: string, n: number) => {
 
 type Ev = { id: string; team_id: string; event_date: string; note: string | null };
 
+// 크론만 부를 수 있게 막는다.
+//
+// 값이 같은지만 보면 안 된다 — SUPABASE_SERVICE_ROLE_KEY 에 들어가는 값이 프로젝트마다
+// 레거시 JWT 일 수도, 새 형식(sb_secret_…)일 수도 있어서 멀쩡한 service_role 키로 불러도 막힌다.
+// 그래서 토큰 안의 role 을 본다. 그게 이 키의 정체다.
+//
+// 서명을 여기서 다시 검사하지 않아도 되는 이유: 이 함수는 Verify JWT 가 켜진 채 배포되므로,
+// 여기까지 온 토큰은 이미 게이트웨이가 프로젝트 비밀키로 서명을 확인한 것이다.
+// 위조 토큰은 애초에 못 들어온다(그때는 UNAUTHORIZED_INVALID_JWT_FORMAT 으로 잘린다).
+// 일반 사용자 토큰은 role 이 'authenticated' 라 여기서 걸린다.
+function isServiceCaller(token: string, service: string | undefined){
+  if (!token) return false;
+  if (service && token === service) return true;
+  const seg = token.split('.')[1];
+  if (!seg) return false;
+  try {
+    const b64 = seg.replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(b64 + '='.repeat((4 - b64.length % 4) % 4)));
+    return payload?.role === 'service_role';
+  } catch { return false; }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   if (req.method !== 'POST') return fail('POST 만 받습니다', 405);
@@ -65,7 +87,8 @@ Deno.serve(async (req) => {
 
   // 부른 사람 확인 — 크론만 부를 수 있다. 사용자 토큰으로는 통과하지 못한다.
   const bearer = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '').trim();
-  if (bearer !== SERVICE) return fail('이 함수는 예약 작업만 호출할 수 있습니다', 401);
+  if (!isServiceCaller(bearer, SERVICE)) return fail(
+    'service_role 키로만 호출할 수 있습니다. anon(공개) 키를 보내셨는지 확인해 주세요.', 401);
 
   // 테스트용 손잡이 — event_id 를 주면 그 정기전 하나만, 날짜와 발송 여부를 따지지 않고 보낸다.
   let forceId: string | null = null;
