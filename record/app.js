@@ -1821,21 +1821,27 @@ function monthOf(off){
   const n = new Date();
   const s = new Date(n.getFullYear(), n.getMonth() + off, 1);
   const e = new Date(s.getFullYear(), s.getMonth() + 1, 0);   // 다음 달 0일 = 이번 달 말일
-  return { from: ymd(s), to: ymd(e), label: s.getFullYear() + '년 ' + (s.getMonth() + 1) + '월' };
+  return {
+    from: ymd(s), to: ymd(e),
+    label: s.getFullYear() + '년 ' + (s.getMonth() + 1) + '월',
+    m: (s.getMonth() + 1) + '월'     // 두 달을 나란히 적을 때 쓰는 짧은 이름
+  };
 }
 
 let monthCache = { key: '', data: null };
 function monthData(){
   const key = RAW_GAMES.length + '|' + todayYmd();
   if (monthCache.key === key && monthCache.data) return monthCache.data;
-  const cur = monthOf(0), prev = monthOf(-1);
+  // 성장·결산 모두 '지난달'이 기준 달이다. 진행 중인 이번 달은 며칠 치만 쌓여 있어
+  // 견주면 들쭉날쭉하니, 다 끝난 지난달을 그 전달과 견준다.
+  const prev = monthOf(-1), prev2 = monthOf(-2);
   const at = g => ymd(new Date(g.played_at));
   const data = {
-    cur, prev,
-    curD:  processData(RAW_GAMES.filter(g => inRange(at(g), cur.from, cur.to)), RAW_MEMBERS),
-    prevD: processData(RAW_GAMES.filter(g => inRange(at(g), prev.from, prev.to)), RAW_MEMBERS),
-    // 하이런 '경신' 판정용 — 이번 달 이전 통산
-    befD:  processData(RAW_GAMES.filter(g => at(g) < cur.from), RAW_MEMBERS)
+    prev, prev2,
+    prevD:  processData(RAW_GAMES.filter(g => inRange(at(g), prev.from, prev.to)), RAW_MEMBERS),
+    prev2D: processData(RAW_GAMES.filter(g => inRange(at(g), prev2.from, prev2.to)), RAW_MEMBERS),
+    // 하이런 '경신' 판정용 — 지난달 이전 통산
+    befD:  processData(RAW_GAMES.filter(g => at(g) < prev.from), RAW_MEMBERS)
   };
   monthCache = { key, data };
   return data;
@@ -1849,7 +1855,7 @@ const fPct = v => v.toFixed(1) + '%';   // 보정 승률 — 통합 순위표와
 const arrow = (a, b) => a + '<span class="ar">→</span>' + b;
 
 const HOME_TABS = [
-  { k: 'grow', t: '이번 달 성장' },
+  { k: 'grow', t: '성장' },
   { k: 'last', t: '지난 달 결산' },
   { k: 'best', t: '최고 기록' }
 ];
@@ -1895,11 +1901,12 @@ const mkCards = (rows, badge, foot) => rows.filter(([r]) => r)
     label, foot: ownFoot || foot
   }));
 
-// ── 이번 달 성장 — 하이런 신기록 → 수지 → 에버리지 → 승률 ──
+// ── 성장 — 지난달이 그 전달보다 얼마나 올랐나. 하이런 신기록 → 수지 → 에버리지 → 승률 ──
 function homeGrowCards(){
   const M = monthData();
-  const cur = M.cur;
-  const C = pMap(M.curD), P = pMap(M.prevD), B = pMap(M.befD);
+  const cur = M.prev;                 // 견주는 기준 달 = 지난달
+  const C = pMap(M.prevD), P = pMap(M.prev2D), B = pMap(M.befD);
+  const gap = (p, c) => M.prev2.m + ' ' + p.games + '경기 → ' + M.prev.m + ' ' + c.games + '경기';
   const out = [];
 
   // ── 수지 상승 (handicap_history) ──
@@ -1920,7 +1927,7 @@ function homeGrowCards(){
     .filter(e => e.to > e.from)
     .sort((a, b) => (b.to - b.from) - (a.to - a.from));
 
-  // ── 성적 변화 (지난달 대비) ──
+  // ── 성적 변화 (지난달이 그 전달보다) ──
   // 한두 경기 뽑기로 뒤집히지 않게 양쪽 달 모두 2경기 이상인 사람만
   const avgUp = [];
   const rateUp = [];
@@ -1940,27 +1947,25 @@ function homeGrowCards(){
   }
 
   hrNew.sort((a, b) => b.d - a.d).slice(0, 3).forEach(g => out.push({
-    badge: '📈 이번 달 성장', name: g.c.name, player: g.c.name,
+    badge: '📈 성장', name: g.c.name, player: g.c.name,
     big: arrow(g.b.bestHr, g.c.bestHr), label: '하이런 신기록',
     delta: '+' + g.d, foot: '지난 기록을 ' + cur.label + '에 갈아치웠습니다'
   }));
 
   hdUp.forEach(e => out.push({
-    badge: '📈 이번 달 성장', name: memName[e.id], player: memName[e.id],
+    badge: '📈 성장', name: memName[e.id], player: memName[e.id],
     big: arrow(e.from * 10, e.to * 10), label: '수지 상승',
     delta: '+' + (e.to - e.from) * 10, foot: cur.label
   }));
   avgUp.sort((a, b) => b.d - a.d).slice(0, 3).forEach(g => out.push({
-    badge: '📈 이번 달 성장', name: g.c.name, player: g.c.name,
+    badge: '📈 성장', name: g.c.name, player: g.c.name,
     big: arrow(f3(g.p.avgAvg), f3(g.c.avgAvg)), label: '에버리지 상승',
-    delta: '+' + f3(g.d),
-    foot: '지난달 ' + g.p.games + '경기 → 이번달 ' + g.c.games + '경기'
+    delta: '+' + f3(g.d), foot: gap(g.p, g.c)
   }));
   rateUp.sort((a, b) => b.d - a.d).slice(0, 2).forEach(g => out.push({
-    badge: '📈 이번 달 성장', name: g.c.name, player: g.c.name,
+    badge: '📈 성장', name: g.c.name, player: g.c.name,
     big: arrow(fPct(g.p.adjRate), fPct(g.c.adjRate)), label: '승률 상승',
-    delta: '+' + g.d.toFixed(1) + '%p',
-    foot: '지난달 ' + g.p.games + '경기 → 이번달 ' + g.c.games + '경기'
+    delta: '+' + g.d.toFixed(1) + '%p', foot: gap(g.p, g.c)
   }));
 
   return out;
@@ -2000,7 +2005,7 @@ function homeBestCards(){
 
 // 고른 묶음이 비어 있으면 빈 화면 대신 안내 한 장
 const HOME_EMPTY = {
-  grow: ['📈 이번 달 성장', '이번 달 성장 소식은 아직이에요', '지난달과 견줄 기록이 쌓이면 여기에 뜹니다'],
+  grow: ['📈 성장', '아직 성장 소식이 없어요', '지난달과 그 전달을 견줄 기록이 쌓이면 여기에 뜹니다'],
   last: ['🏅 지난 달 결산', '지난 달 기록이 없어요', '한 달 치가 쌓이면 결산이 만들어집니다'],
   best: ['👑 통산 최고 기록', '아직 기록이 없어요', '첫 경기를 치면 여기가 채워집니다']
 };
