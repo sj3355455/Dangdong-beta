@@ -11,7 +11,7 @@
  *  - 그 외 정적 자산(아이콘·매니페스트): 캐시 우선 + 백그라운드 갱신
  *  - 외부 출처(Supabase API 등): 가로채지 않음
  */
-const VERSION = 'v278';
+const VERSION = 'v279';
 // 배포 경로를 자동 감지 → 같은 코드가 /Dangdong/(본 앱)·/Dangdong-beta/(테스트)에서 그대로 동작.
 const BASE = new URL('.', self.location).pathname;   // 예: '/Dangdong/' 또는 '/Dangdong-beta/'
 const CACHE = 'dangdong' + BASE + VERSION;           // 스코프별 캐시 이름 분리(같은 origin이라 겹치면 안 됨)
@@ -109,10 +109,23 @@ async function sendRsvp(data, status){
   catch (_) { return status; }
 }
 
+/* 눌린 버튼을 'yes'/'no' 로 정리한다.
+   표준은 actions 에 적어 둔 action 값('yes'/'no')이 그대로 오는 것이지만, 일부 안드로이드
+   브라우저는 대신 버튼 제목('✅ 참석')이나 순번('0')을 넘긴다. 그대로 두면 아래 검사에
+   걸려 표가 남지 않거나 엉뚱한 쪽으로 샌다 → 제목·순번도 같은 뜻으로 받아 준다.
+   무엇으로도 못 읽으면 '' 을 주고, 그때는 투표하지 않고 앱을 연다(찍기보다 안 찍는 게 낫다). */
+function readAction(a){
+  if (a === 'yes' || a === 'no') return a;
+  if (typeof a !== 'string' || !a) return '';
+  if (a.includes('참석') || a === '0') return 'yes';
+  if (a.includes('불참') || a === '1') return 'no';
+  return '';
+}
+
 self.addEventListener('notificationclick', e => {
   const data = e.notification.data || {};
   const url = data.url || (BASE + 'score/');
-  const act = e.action;
+  const act = readAction(e.action);
   e.notification.close();
 
   // 버튼을 눌렀으면 표만 남기고 끝낸다 — 앱을 여는 건 오히려 방해다.
