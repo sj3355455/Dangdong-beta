@@ -660,18 +660,40 @@ let rankView='table';   // 'table' | 'podium' — 순위 탭 안에서 표/포�
    (에버리지가 그대로면 팀평균이닝도 그대로다). 그래서 자동 반영은 하지 않고 추천만 보여 준다. */
 const REC_GOAL_INN = 15;    // 목표 이닝
 const REC_PULL = 0.25;      // 한 회차에 좁히는 격차 비율
-const REC_MIN_GAMES = 5;    // 기준 계산에 넣을 최소 경기수. 한두 경기짜리 에버리지는 너무 흔들린다
+const REC_MIN_GAMES = 3;    // 이보다 적으면 권장을 내지 않는다 — 한두 경기로 수지가 오르내리면 안 된다
+const REC_MAX_GAMES = 10;   // 최근 몇 경기까지 볼지. 수지는 '지금 실력'에 맞춰야 하므로 통산이 아니다
 
-// rows 에 recHd(권장수지)를 붙이고 이번 회차의 기준을 돌려준다. 셀 수 없으면 null.
+// 최근 REC_MAX_GAMES 경기만으로 다시 낸 에버리지. history[0] 이 가장 최근이다
+// (processData 가 오래된 경기부터 훑으며 unshift 한다).
+function recentAvg(p){
+  let score = 0, binn = 0, games = 0;
+  for (const h of (p.history || [])) {
+    if (games >= REC_MAX_GAMES) break;
+    if (!(h.ballInn > 0)) continue;        // 알 이닝이 없는 기록은 에버리지를 낼 수 없다
+    score += h.score; binn += h.ballInn; games++;
+  }
+  return { games, avg: binn > 0 ? score / binn : 0 };
+}
+
+/* rows 에 recHd(권장수지)를 붙이고 이번 회차의 기준을 돌려준다. 셀 수 없으면 null.
+   화면의 기간·정기전 필터는 일부러 무시하고 통산 기록(getFullProcessData)에서 최근 경기를 센다.
+   '오늘' 하루만 보고 있어도 권장수지는 같은 값이어야 하기 때문이다 — 기간을 좁힐 때마다
+   기준이 흔들리면 무엇을 보고 수지를 고쳐야 할지 알 수 없다. 팀 평균도 화면에 걸린 사람이
+   아니라 팀 전체에서 낸다. */
 function attachRecHd(rows){
   rows.forEach(p => { p.recHd = null; });
-  const base = rows.filter(p => p.games >= REC_MIN_GAMES && p.handicap > 0 && p.avgAvg > 0);
+  const stats = getFullProcessData().players
+    .filter(p => p.id)                     // 게스트는 수지가 없다
+    .map(p => ({ p, ...recentAvg(p) }));
+  const base = stats.filter(s => s.games >= REC_MIN_GAMES && s.p.handicap > 0 && s.avg > 0);
   if (base.length < 2) return null;        // 둘도 안 되면 '팀 평균'이라 부를 수 없다
-  const teamInn = base.reduce((a, p) => a + p.handicap / p.avgAvg, 0) / base.length;
+  const teamInn = base.reduce((a, s) => a + s.p.handicap / s.avg, 0) / base.length;
   const goalInn = teamInn + REC_PULL * (REC_GOAL_INN - teamInn);
+
+  const byId = new Map(stats.map(s => [s.p.id, s]));
   rows.forEach(p => {
-    // 표본이 모자란 사람은 권장을 내지 않는다 — 한 경기로 수지가 오르내리면 안 된다
-    if (p.games >= REC_MIN_GAMES && p.avgAvg > 0) p.recHd = snapHd(p.avgAvg * goalInn * 10);
+    const s = byId.get(p.id);
+    if (s && s.games >= REC_MIN_GAMES && s.avg > 0) p.recHd = snapHd(s.avg * goalInn * 10);
   });
   return { teamInn, goalInn, n: base.length };
 }
@@ -1023,8 +1045,9 @@ function renderRank(){
   // 권장수지가 어디서 나온 숫자인지 밝혀 둔다 — 근거 없이 수지를 고치라고 할 수는 없다
   const recNote = (rankView==='podium' || !rec) ? '' : `<div class="sub" style="margin:6px 0 0">
       💡 <b>권장수지</b> — 팀 평균 ${rec.teamInn.toFixed(1)}이닝이면 목표 ${REC_GOAL_INN}이닝 쪽으로
-      ${Math.round(REC_PULL*100)}%만 당겨 <b>이번 기준 ${rec.goalInn.toFixed(1)}이닝</b>으로 잡습니다
-      (${REC_MIN_GAMES}경기 이상 ${rec.n}명으로 계산 · 그 아래는 표본이 모자라 '—').
+      ${Math.round(REC_PULL*100)}%만 당겨 <b>이번 기준 ${rec.goalInn.toFixed(1)}이닝</b>으로 잡습니다.
+      위 기간과 무관하게 <b>각자 최근 ${REC_MAX_GAMES}경기</b>로 계산합니다
+      (${REC_MIN_GAMES}경기 이상인 ${rec.n}명 기준 · 그 아래는 표본이 모자라 '—').
       추천일 뿐 수지가 저절로 바뀌지는 않습니다.</div>`;
   const el = $(`<div class="card">
       <div style="margin-bottom:14px;">
