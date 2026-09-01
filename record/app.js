@@ -684,7 +684,12 @@ let rankView='table';   // 'table' | 'podium' — 순위 탭 안에서 표/포�
    (에버리지가 그대로면 팀평균이닝도 그대로다). 그래서 자동 반영은 하지 않고 추천만 보여 준다. */
 const REC_GOAL_INN = 15;    // 목표 이닝
 const REC_PULL = 0.25;      // 한 회차에 좁히는 격차 비율
-const REC_MIN_GAMES = 3;    // 이보다 적으면 권장을 내지 않는다 — 한두 경기로 수지가 오르내리면 안 된다
+// 아래 둘은 일부러 다르다.
+//  · 팀 기준이닝은 사람이 많을수록 안정되므로 문턱을 낮게 두고 되도록 많이 담는다(3경기).
+//  · 반대로 개인에게 "수지를 이 값으로 고치세요"라고 내미는 건 표본이 넉넉할 때만 한다(5경기).
+// 그래서 3~4경기인 사람은 팀 평균이닝·에버리지 계산에는 그대로 들어가되, 자기 칸은 '—' 로 남는다.
+const REC_MIN_GAMES = 3;    // 팀 기준이닝을 낼 때 넣을 최소 경기수 — 한두 경기짜리 에버리지는 너무 흔들린다
+const REC_SHOW_GAMES = 5;   // 개인 권장수지를 '표기'할 최소 경기수 (계산에서 빼는 게 아니라 표기만 미룬다)
 const REC_MAX_GAMES = 10;   // 최근 몇 경기까지 볼지. 수지는 '지금 실력'에 맞춰야 하므로 통산이 아니다
 
 // 최근 REC_MAX_GAMES 경기만으로 다시 낸 에버리지. history[0] 이 가장 최근이다
@@ -717,7 +722,8 @@ function attachRecHd(rows){
   const byId = new Map(stats.map(s => [s.p.id, s]));
   rows.forEach(p => {
     const s = byId.get(p.id);
-    if (s && s.games >= REC_MIN_GAMES && s.avg > 0) p.recHd = snapHd(s.avg * goalInn * 10);
+    // 표기 문턱은 REC_SHOW_GAMES — 위 teamInn/goalInn 은 이 사람도 넣어 이미 계산이 끝났다
+    if (s && s.games >= REC_SHOW_GAMES && s.avg > 0) p.recHd = snapHd(s.avg * goalInn * 10);
   });
   return { teamInn, goalInn, n: base.length };
 }
@@ -1385,11 +1391,21 @@ function showPlayer(name){
   let playerFrom = rankFrom;
   let playerTo = rankTo;
 
+  // 권장수지 — 순위표와 똑같은 값(통산 최근 경기 기준)이라 기간·모드를 바꿔도 흔들리지 않는다.
+  // 그래서 아래 성적 칸이 아니라 지금 수지 옆, 한 번만 그리는 머리말에 붙인다.
+  const recRow = [{ id: p.id }];
+  attachRecHd(recRow);
+  const recHd = recRow[0].recHd;
+  const nowHd = (p.handicap || 0) * 10;
+  const recStr = recHd == null ? '' :
+    ' · 권장수지 <b>' + recHd + '</b>' +
+    (recHd > nowHd ? '<span class="up">↑</span>' : recHd < nowHd ? '<span class="dn">↓</span>' : '');
+
   const el = $(`<div>
     <button class="back">← 순위로</button>
     <div class="card">
       <h2 style="margin:0">${esc(p.name)}</h2>
-      <div class="sub" style="margin:2px 0 10px">수지 ${p.handicap * 10}</div>
+      <div class="sub" style="margin:2px 0 10px">수지 ${nowHd}${recStr}</div>
       <div style="margin-bottom:12px;">
         ${rangeRowHtml('pd-period', playerFrom, playerTo, `<select class="field ptab" style="flex:0 0 auto; width:84px; height:34px; padding:0 26px 0 8px; font-size:0.9rem; border-radius:8px; margin:0;">
             ${MODE_TABS.map(m=>`<option value="${m}" ${m===playerMode?'selected':''}>${m}</option>`).join('')}
@@ -1435,7 +1451,7 @@ function showPlayer(name){
       return;
     }
 
-    // 권장수지는 팀 전체를 놓고 매기는 값이라 한 사람 카드에는 올리지 않는다
+    // 권장수지는 기간·모드를 따라 움직이지 않는 값이라 이 성적 칸에는 넣지 않는다(머리말에 따로 있다)
     const COLS = colsFor(playerMode).filter(c => c.k !== 'name' && c.k !== 'handicap' && c.k !== 'recHd');
     const stObj = calcStatsForHistory(h);
     
