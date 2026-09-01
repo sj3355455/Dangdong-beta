@@ -589,8 +589,12 @@ const getAuth = () => { try { return JSON.parse(localStorage.getItem(LS_AUTH)); 
 
 const COL_NAME = {k:'name', t:'이름', txt:1};
 const COL_HDCP = {k:'handicap', t:'수지', fmt:v=>v ? v*10 : '—'};
+// 수지 선택지 (표시값). 저장값은 이 값의 1/10 이고, 그게 곧 2인 기준 게임 목표점수다.
+const HD_OPTIONS = [50, 80, 100, 120, 150, 200, 250, 300, 400, 500];
+const snapHd = v => HD_OPTIONS.reduce((a, b) => Math.abs(b - v) < Math.abs(a - v) ? b : a);
 const COLS_ALL = [   // 통합: 실력 지표 통합. 승수·승률 대신 보정 승률(준비 중)
   COL_NAME, COL_HDCP,
+  {k:'recHd',    t:'권장수지'},
   {k:'games',    t:'경기수'},
   {k:'adjRate',  t:'승률',      fmt:v=>v.toFixed(1)+'%'},
   {k:'avgAvg',   t:'에버리지',   fmt:v=>v.toFixed(3)},
@@ -640,6 +644,37 @@ const PODIUM_KEYS = ['adjRate','winRate','avgAvg','streakAvg','hitRate','bestHr'
 const podiumCols = COLS => COLS.filter(c => PODIUM_KEYS.includes(c.k));
 let rankMode='통합', sortKey='avgAvg', sortAsc=false;
 let rankView='table';   // 'table' | 'podium' — 순위 탭 안에서 표/포디움 전환
+
+/* ══ 권장수지 ══
+   목표는 '알을 15이닝 안에 다 빼는 것'. 다만 팀 실력이 목표에서 멀면 한 번에 들이대지 않는다
+   (당동은 지금 평균 33이닝이라 목표를 그대로 적용하면 수지가 반토막 나고 대부분 최저치에 뭉친다).
+   그래서 지금 팀 평균에서 목표 쪽으로 REC_PULL 만큼만 당긴 값을 이번 회차의 기준으로 삼는다.
+
+     팀평균이닝 = 평균( 수지 저장값 ÷ 에버리지 )     ← 저장값이 곧 목표점수, 에버리지 분모는 알 이닝
+     기준이닝   = 팀평균이닝 + 0.25 × (15 − 팀평균이닝)
+     권장수지   = 개인 에버리지 × 기준이닝 × 10       ← ×10 은 저장값 → 표시 수지
+
+   팀이 목표보다 느리면 기준이 내려가 수지가 낮아지고, 빨라지면 반대로 올라간다.
+   목표에 닿으면 괄호가 0이 되어 저절로 멈추므로 하한을 따로 두지 않아도 된다.
+   회차가 넘어가는 건 사람이 수지를 실제로 고쳤을 때뿐이다 — 경기 기록만 쌓여서는 움직이지 않는다
+   (에버리지가 그대로면 팀평균이닝도 그대로다). 그래서 자동 반영은 하지 않고 추천만 보여 준다. */
+const REC_GOAL_INN = 15;    // 목표 이닝
+const REC_PULL = 0.25;      // 한 회차에 좁히는 격차 비율
+const REC_MIN_GAMES = 5;    // 기준 계산에 넣을 최소 경기수. 한두 경기짜리 에버리지는 너무 흔들린다
+
+// rows 에 recHd(권장수지)를 붙이고 이번 회차의 기준을 돌려준다. 셀 수 없으면 null.
+function attachRecHd(rows){
+  rows.forEach(p => { p.recHd = null; });
+  const base = rows.filter(p => p.games >= REC_MIN_GAMES && p.handicap > 0 && p.avgAvg > 0);
+  if (base.length < 2) return null;        // 둘도 안 되면 '팀 평균'이라 부를 수 없다
+  const teamInn = base.reduce((a, p) => a + p.handicap / p.avgAvg, 0) / base.length;
+  const goalInn = teamInn + REC_PULL * (REC_GOAL_INN - teamInn);
+  rows.forEach(p => {
+    // 표본이 모자란 사람은 권장을 내지 않는다 — 한 경기로 수지가 오르내리면 안 된다
+    if (p.games >= REC_MIN_GAMES && p.avgAvg > 0) p.recHd = snapHd(p.avgAvg * goalInn * 10);
+  });
+  return { teamInn, goalInn, n: base.length };
+}
 
 function rankRows(mode){
   if(mode==='통합') return DATA.players.filter(p=>p.games>0 && p.id);
@@ -925,6 +960,10 @@ function renderRank(){
   };
   const rankOf = [];
   rows.forEach((p, i) => { rankOf[i] = (i > 0 && sameRank(p, rows[i-1])) ? rankOf[i-1] : i + 1; });
+
+  // 권장수지는 통합 성적으로만 낸다. 3인·4인은 게임 목표점수가 인원수만큼 줄어들어
+  // (score/app.js 의 scaledTarget) 같은 이닝 기준을 그대로 댈 수 없기 때문이다.
+  const rec = rankMode === '통합' ? attachRecHd(rows) : null;
   
   const modeSel = `<select class="field p-mode" style="flex:0 0 auto; width:84px; height:34px; padding:0 26px 0 8px; font-size:0.9rem; border-radius:8px; margin:0;">` +
     MODE_TABS.map(m => `<option value="${m}" ${m===rankMode?'selected':''}>${m}</option>`).join('') +
@@ -948,6 +987,13 @@ function renderRank(){
       const medal = !ranked ? (i+1) : (['🥇','🥈','🥉'][rk-1] || rk);
       const tds = COLS.map(c=>{
         if(c.k==='name') return `<td class="name"><a class="pl" data-p="${esc(p.name)}">${esc(p.name)}</a></td>`;
+        // 권장수지는 지금 수지와 견줘야 뜻이 산다 → 오르내림을 화살표로 같이 보여 준다
+        if(c.k==='recHd'){
+          if(p.recHd==null) return `<td class="rec">—</td>`;
+          const now = (p.handicap||0)*10;
+          const d = p.recHd>now ? '<span class="up">↑</span>' : p.recHd<now ? '<span class="dn">↓</span>' : '';
+          return `<td class="rec"><b>${p.recHd}</b>${d}</td>`;
+        }
         return `<td>${cell(p, c)}</td>`;
       }).join('');
       return `<tr><td class="rk">${medal}</td>${tds}</tr>`;
@@ -974,6 +1020,12 @@ function renderRank(){
   // 공동 등수 안내는 어느 모드에서나 필요하다 (이름순은 등수가 아니라 줄 번호라 제외)
   const rankNote = sortKey === 'name' ? '' :
     ' · 정렬 기준 값이 같으면 <b>공동 등수</b>입니다 (공동 2등이 둘이면 다음은 4등).';
+  // 권장수지가 어디서 나온 숫자인지 밝혀 둔다 — 근거 없이 수지를 고치라고 할 수는 없다
+  const recNote = (rankView==='podium' || !rec) ? '' : `<div class="sub" style="margin:6px 0 0">
+      💡 <b>권장수지</b> — 팀 평균 ${rec.teamInn.toFixed(1)}이닝이면 목표 ${REC_GOAL_INN}이닝 쪽으로
+      ${Math.round(REC_PULL*100)}%만 당겨 <b>이번 기준 ${rec.goalInn.toFixed(1)}이닝</b>으로 잡습니다
+      (${REC_MIN_GAMES}경기 이상 ${rec.n}명으로 계산 · 그 아래는 표본이 모자라 '—').
+      추천일 뿐 수지가 저절로 바뀌지는 않습니다.</div>`;
   const el = $(`<div class="card">
       <div style="margin-bottom:14px;">
         ${rangeRowHtml('p-period', rankFrom, rankTo, modeSel)}
@@ -981,7 +1033,7 @@ function renderRank(){
         ${metricSel}
       </div>
       ${inner}
-      <div class="sub" style="margin:10px 0 0">${note}${rankNote}</div></div>`);
+      <div class="sub" style="margin:10px 0 0">${note}${rankNote}</div>${recNote}</div>`);
   bindRangePicker(el, 'p-period', { max: todayYmd(), allowClear: true, aria: '조회 기간' });
 
   const refreshRankSub = () => {
@@ -1338,7 +1390,8 @@ function showPlayer(name){
       return;
     }
 
-    const COLS = colsFor(playerMode).filter(c => c.k !== 'name' && c.k !== 'handicap');
+    // 권장수지는 팀 전체를 놓고 매기는 값이라 한 사람 카드에는 올리지 않는다
+    const COLS = colsFor(playerMode).filter(c => c.k !== 'name' && c.k !== 'handicap' && c.k !== 'recHd');
     const stObj = calcStatsForHistory(h);
     
     let statsHtml = '';
@@ -2313,7 +2366,7 @@ function renderAdminMemberEditPage(m){
         <label style="display:block; font-size:0.85rem; color:var(--muted); margin-bottom:6px;">수지 (점수)</label>
         <select id="admMHd" class="field" style="margin:0;">
           <option value="">수지 선택</option>
-          ${[50, 80, 100, 120, 150, 200, 250, 300, 400, 500].map(v => `<option value="${v/10}" ${m.handicap === v/10 ? 'selected' : ''}>${v}</option>`).join('')}
+          ${HD_OPTIONS.map(v => `<option value="${v/10}" ${m.handicap === v/10 ? 'selected' : ''}>${v}</option>`).join('')}
         </select>
       </div>
 

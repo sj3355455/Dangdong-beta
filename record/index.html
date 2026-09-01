@@ -142,6 +142,10 @@ table.rank tbody tr:hover td.rk,table.rank tbody tr:hover td.name{background:var
 a.pl{color:var(--text);text-decoration:none;font-weight:600;border-bottom:1px dashed var(--muted);cursor:pointer}
 a.pl:hover{color:var(--accent);border-color:var(--accent)}
 .win{color:var(--accent);font-weight:600}
+/* 권장수지 칸 — 지금 수지보다 오르면 ↑, 내리면 ↓. 승/패 색과 같은 뜻(오름=좋음)이 아니라
+   '어느 쪽으로 옮기라'는 방향 표시라 초록/빨강 대신 차분한 색을 쓴다. */
+td.rec b{font-weight:800}
+td.rec .up,td.rec .dn{margin-left:2px;font-size:.8em;font-weight:700;color:var(--muted)}
 .back{background:none;border:none;color:var(--accent);cursor:pointer;
   font-size:.9rem;padding:0;margin-bottom:12px}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(80px,1fr));gap:10px;margin:14px 0}
