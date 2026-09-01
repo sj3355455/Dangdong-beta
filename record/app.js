@@ -97,7 +97,7 @@ function missOf(p, bInn){
 function eventRowHtml(cls){
   if (!HAS_EVENTS || !RAW_EVENTS.length) return '';
   return `<button class="mbtn push ${cls}-evt ${clubOnly?'on':''}">
-      ${clubOnly ? '✓ ' : ''}${EVT_ICON} 정기전만 보기
+      ${clubOnly ? '✓ ' : ''}정기전만
     </button>`;
 }
 // 토글 버튼을 변경 핸들러에 연결. 없으면 아무것도 하지 않는다.
@@ -107,7 +107,8 @@ function bindEventSel(el, cls, onChange){
 }
 // 최소 경기 수 버튼 — 누를 때마다 1 → 3 → 5 → 10 → 1 로 돈다.
 // 셀렉트가 아니라 버튼인 이유는 옆의 정기전 토글과 생김새·조작을 맞추기 위해서다.
-const minGamesLabel = () => minGames > 1 ? `✓ 🎯 ${minGames}경기 이상` : '🎯 경기 수 무관';
+// 도구 줄에 버튼이 넷이라 폭이 빠듯하다 — 아이콘 없이 글자만 쓴다
+const minGamesLabel = () => minGames > 1 ? `✓ ${minGames}경기 이상` : '경기 수 무관';
 function minGamesBtnHtml(cls){
   return `<button class="mbtn ${cls}-min ${minGames > 1 ? 'on' : ''}"
       title="이 경기 수 이상 친 선수만 순위에 올립니다">${minGamesLabel()}</button>`;
