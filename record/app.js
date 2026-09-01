@@ -985,7 +985,7 @@ function renderRank(){
 
   // 권장수지는 통합 성적으로만 낸다. 3인·4인은 게임 목표점수가 인원수만큼 줄어들어
   // (score/app.js 의 scaledTarget) 같은 이닝 기준을 그대로 댈 수 없기 때문이다.
-  const rec = rankMode === '통합' ? attachRecHd(rows) : null;
+  if (rankMode === '통합') attachRecHd(rows);
   
   const modeSel = `<select class="field p-mode" style="flex:0 0 auto; width:84px; height:34px; padding:0 26px 0 8px; font-size:0.9rem; border-radius:8px; margin:0;">` +
     MODE_TABS.map(m => `<option value="${m}" ${m===rankMode?'selected':''}>${m}</option>`).join('') +
@@ -1039,16 +1039,6 @@ function renderRank(){
     : (rankMode==='3인'||rankMode==='4인')
       ? '표 제목을 누르면 정렬됩니다. · <b>평균순위</b>는 동순위를 분수로 계산합니다(공동 2등 = 2.5등).'
       : '표 제목을 누르면 그 기준으로 정렬됩니다.';
-  // 공동 등수 안내는 어느 모드에서나 필요하다 (이름순은 등수가 아니라 줄 번호라 제외)
-  const rankNote = sortKey === 'name' ? '' :
-    ' · 정렬 기준 값이 같으면 <b>공동 등수</b>입니다 (공동 2등이 둘이면 다음은 4등).';
-  // 권장수지가 어디서 나온 숫자인지 밝혀 둔다 — 근거 없이 수지를 고치라고 할 수는 없다
-  const recNote = (rankView==='podium' || !rec) ? '' : `<div class="sub" style="margin:6px 0 0">
-      💡 <b>권장수지</b> — 팀 평균 ${rec.teamInn.toFixed(1)}이닝이면 목표 ${REC_GOAL_INN}이닝 쪽으로
-      ${Math.round(REC_PULL*100)}%만 당겨 <b>이번 기준 ${rec.goalInn.toFixed(1)}이닝</b>으로 잡습니다.
-      위 기간과 무관하게 <b>각자 최근 ${REC_MAX_GAMES}경기</b>로 계산합니다
-      (${REC_MIN_GAMES}경기 이상인 ${rec.n}명 기준 · 그 아래는 표본이 모자라 '—').
-      추천일 뿐 수지가 저절로 바뀌지는 않습니다.</div>`;
   const el = $(`<div class="card">
       <div style="margin-bottom:14px;">
         ${rangeRowHtml('p-period', rankFrom, rankTo, modeSel)}
@@ -1056,7 +1046,7 @@ function renderRank(){
         ${metricSel}
       </div>
       ${inner}
-      <div class="sub" style="margin:10px 0 0">${note}${rankNote}</div>${recNote}</div>`);
+      <div class="sub" style="margin:10px 0 0">${note}</div></div>`);
   bindRangePicker(el, 'p-period', { max: todayYmd(), allowClear: true, aria: '조회 기간' });
 
   const refreshRankSub = () => {
