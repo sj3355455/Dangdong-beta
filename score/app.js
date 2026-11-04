@@ -8,8 +8,6 @@ const show = id => document.querySelectorAll('.screen').forEach(el => el.style.d
 const esc = s => (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch(e){ return d; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} };
-const reqFS = () => { try { if(document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(()=>{}); } catch(e){} };
-const exitFS = () => { try { if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(()=>{}); } catch(e){} };
 
 const LS_AUTH = 'dangScoreAuth', LS_PREFS = 'dangScorePrefs_v4', LS_MEM = 'dangScoreMem', LS_STATE = 'dangScoreState', LS_QUEUE = 'dangScoreQueue', LS_TEAM = 'dangCurrentTeam';
 const MANUAL = '__MANUAL__';
@@ -18,7 +16,7 @@ let auth = lsGet(LS_AUTH, null);
 let members = lsGet(LS_MEM, []);
 let myTeams = [];                        // [{id,name,slug,is_admin}] — 내가 속한 팀들
 let currentTeam = lsGet(LS_TEAM, null);  // 현재 기록 대상 팀 id (없으면 전역 폴백)
-// myBall — '내 공' 자리. null 이면 아직 어느 자리에도 안 들어간 상태(앱을 처음 열었을 때의 기본값).
+// myBall — 내 계정이 앉아 있는 자리. null 이면 어느 자리에도 없는 상태(앱을 처음 열었을 때의 기본값).
 let prefs = lsGet(LS_PREFS, { gameType:'2인', names:['','','',''], pids:[null,null,null,null], targets:[15,15,15,15], myBall:null, cushGoal:1, timeLimit:0 });
 if (prefs.cushGoal == null) prefs.cushGoal = 1;
 if (prefs.timeLimit == null) prefs.timeLimit = 0;
@@ -129,7 +127,7 @@ $('#btnLogout').onclick = async () => {
   if (!confirm('처음 화면으로 돌아갈까요?')) return;
   await logout();   // 알림 구독을 이 계정에서 떼고 로그인·소속 팀을 지운다
   auth = null; currentTeam = null; myTeams = [];
-  exitFS(); show('auth');
+  show('auth');
 };
 
 // 내 소속 팀 목록을 불러오고 현재 팀을 확정한다. (실패 시 전역 폴백 유지)
@@ -241,14 +239,6 @@ function renderSetupCards(modeChanged = false) {
     }
   }
   $('#setupCards').innerHTML = html;
-  
-  let mbHtml = '';
-  for (let i = 0; i < (isTeam ? 2 : N); i++) {
-    const ballIcon = i % 2 === 0 ? '⚪' : '🟡';
-    const label = `${i + 1}번(${ballIcon})`;
-    mbHtml += `<button id="first${i}" class="${prefs.myBall === i ? 'on' : ''}" onclick="applyMyBall(${i})">${label}</button>`;
-  }
-  $('#myBallSeg').innerHTML = mbHtml;
   syncCushSeg();
   syncTimeLimit();
 
@@ -256,7 +246,7 @@ function renderSetupCards(modeChanged = false) {
     fillSelect(i, modeChanged);
     const sel = $('#sel'+i);
     if(sel) {
-      sel.onchange = () => { applySel(i, true); $('#name'+i).value = prefs.names[i]; };
+      sel.onchange = () => { applySel(i, true); $('#name'+i).value = prefs.names[i]; syncMeCard(); };
       if($('#name'+i)){
         $('#name'+i).oninput = e => { prefs.names[i] = e.target.value; lsSet(LS_PREFS, prefs); };
         $('#name'+i).value = prefs.names[i];
@@ -270,12 +260,18 @@ function renderSetupCards(modeChanged = false) {
     if(sel) sel.style.display = showSel ? '' : 'none';
     if(!showSel && $('#name'+i)) $('#name'+i).style.display = '';
   }
+}
 
-  for (let pIdx = 0; pIdx < totalPlayers; pIdx++) {
-    const isMe = (prefs.myBall === pIdx);
-    if($('#sel'+pIdx)) $('#sel'+pIdx).disabled = isMe;
-    if($('#name'+pIdx)) $('#name'+pIdx).disabled = isMe;
-  }
+// 선수를 바꾼 뒤 '나 / 상대' 표시만 다시 맞춘다. (카드를 통째로 다시 그리면 '직접 입력' 칸이 닫힌다)
+function syncMeCard(){
+  normalizeMyBall();
+  document.querySelectorAll('#setupCards .pcard').forEach((c, i) => {
+    const me = prefs.myBall === i;
+    c.classList.toggle('me', me);
+    const lbl = c.querySelector('.plbl');
+    lbl.className = 'plbl ' + (me ? 'me' : 'opp');
+    lbl.textContent = me ? '나' : '상대';
+  });
 }
 
 function fillSelect(i, isUserAction = false){
@@ -283,13 +279,14 @@ function fillSelect(i, isUserAction = false){
   if(!sel) return;
   const cur = prefs.pids[i];
   
-  // 본인은 '상대' 슬롯 목록에선 제외하되, 본인이 배정된 '나' 슬롯에선 유지(이름 자동 채움용)
-  const listMembers = members.filter(m => !auth || m.id !== auth.uid || prefs.pids[i] === auth.uid);
-  
+  // 내 이름은 맨 위에 표시를 붙여 둔다 — 다른 부원과 똑같이 어느 자리에서든 고른다.
+  const isMine = m => !!auth && m.id === auth.uid;
+  const listMembers = [...members.filter(isMine), ...members.filter(m => !isMine(m))];
+
   // 아직 아무도 안 고른 자리는 숨긴 빈 옵션을 맨 앞에 둔다 — 그냥 두면 브라우저가 첫 선수를
   // 골라 놓고 applySel 이 그 사람으로 저장해 버린다. ('선수 선택…' 같은 글자는 넣지 않는다)
   const blank = !cur && !prefs.names[i] ? '<option value="" style="display:none;"></option>' : '';
-  sel.innerHTML = blank + listMembers.map(m => `<option value="${esc(m.id)}">${esc(m.display_name)}</option>`).join('') +
+  sel.innerHTML = blank + listMembers.map(m => `<option value="${esc(m.id)}">${isMine(m) ? `⭐ ${esc(m.display_name)} (나)` : esc(m.display_name)}</option>`).join('') +
     `<option value="${MANUAL}">✏️ 직접 입력</option>`;
   sel.value = cur || (prefs.names[i] ? MANUAL : '');
 
@@ -353,23 +350,23 @@ document.querySelectorAll('#gameTypeSeg button').forEach(b => {
     const newVal = b.dataset.v || b.innerText;
     const modeChanged = (prefs.gameType !== newVal);
     prefs.gameType = newVal;
-    // 인원수를 바꿔도 내 자리를 임의로 잡아주지 않는다. '내 공'은 normalizeMyBall 이
+    // 인원수를 바꿔도 내 자리를 임의로 잡아주지 않는다. 내 자리는 normalizeMyBall 이
     // 내 계정이 실제로 있는 자리에서 다시 계산한다(없으면 어디에도 안 속한 상태).
     lsSet(LS_PREFS, prefs);
     syncSetup(modeChanged);
   };
 });
 
-// '내 공'은 별도 상태가 아니라 "내 계정이 실제로 들어가 있는 자리"에서 그대로 끌어온다.
+// 내 자리는 별도 상태가 아니라 "내 계정이 실제로 들어가 있는 자리"에서 그대로 끌어온다.
 // 그래서 아무 자리도 안 고른 첫 진입에는 null(=1~4번 어디에도 안 속함)이 되고,
-// 인원수를 바꿔 자리가 사라지면 저절로 풀린다. 자리에 넣는 건 '내 공' 버튼 클릭(applyMyBall)뿐.
+// 인원수를 바꿔 자리가 사라지면 저절로 풀린다. 자리에 넣는 건 선수 목록에서 내 이름을 고르는 것뿐.
 function normalizeMyBall(){
   const isTeam = prefs.gameType === '팀전';
   const slots = isTeam ? 2 : parseInt(prefs.gameType.replace('인',''), 10);
   let me = null;
   if (auth) {
     for (let i = 0; i < slots; i++) {
-      // 팀전은 팀 단위라 2번 시드에 내가 있어도 그 팀이 '내 공'
+      // 팀전은 팀 단위라 2번 시드에 내가 있어도 그 팀이 내 자리
       if (prefs.pids[i] === auth.uid || (isTeam && prefs.pids[i + 2] === auth.uid)) { me = i; break; }
     }
   }
@@ -457,38 +454,6 @@ window.openTimePopup = function(){
   requestAnimationFrame(() => { w.scrollTop = idx * TIME_ITEM_H; updateTimeWheel(); });
 };
 
-window.applyMyBall = function(i) {
-  if (!auth) return toast('로그인이 필요합니다.');
-  
-  // 아직 어느 자리에도 안 들어가 있으면(myBall === null) 맞바꿀 자리가 없으니 그냥 이 자리에 들어간다.
-  if (prefs.myBall != null && prefs.myBall !== i) {
-    const other = i;
-    const current = prefs.myBall;
-
-    // 1시드(혹은 개인전 선수) 스왑 — 목표 점수는 3구·4구 칸을 함께 바꾼다(선수를 따라가야 하므로)
-    const swap = arr => { const t = arr[current]; arr[current] = arr[other]; arr[other] = t; };
-    [prefs.names, prefs.pids, prefs.targets, prefs.targets3].forEach(swap);
-    
-    // 팀전일 경우 2시드 선수도 함께 스왑하여 팀 전체가 공 색깔을 바꾸도록 함
-    if (prefs.gameType === '팀전') {
-      const p2Cur = current + 2;
-      const p2Oth = other + 2;
-      const tName = prefs.names[p2Cur];
-      const tPid = prefs.pids[p2Cur];
-      prefs.names[p2Cur] = prefs.names[p2Oth];
-      prefs.pids[p2Cur] = prefs.pids[p2Oth];
-      prefs.names[p2Oth] = tName;
-      prefs.pids[p2Oth] = tPid;
-    }
-  }
-  
-  prefs.myBall = i;
-  prefs.pids[i] = auth.uid;
-  if (prefs.gameType !== '팀전') autoTarget(i);
-  lsSet(LS_PREFS, prefs);
-  syncSetup(prefs.gameType === '팀전');
-}
-
 $('#btnStart').onclick = () => {
   const err = $('#sErr'); err.textContent = '';
   const isTeam = prefs.gameType === '팀전';
@@ -527,7 +492,7 @@ $('#btnStart').onclick = () => {
     first: 0, timeLimitMs: (prefs.timeLimit ?? 0) * 60000,
     ...freshCounters(N, 0, is3() ? 0 : (prefs.cushGoal ?? 1))
   };
-  save(); buildGameZones(); render(); show('game'); reqFS();
+  save(); buildGameZones(); render(); show('game');
   toast(`${isTeam ? TZNAMES[S.first] : S.names[S.first]} 선공으로 시작!`);
   speak('게임 시작');
 };
@@ -570,20 +535,42 @@ function freshCounters(N, turn, round){
     round, lastInning: false, winners: [],
     tp: 0, tpPts: 0, turn, tc: 0,
     timeMs: z(), turnStart: Date.now(), timeUp: false,
-    paused: false, pausedMs: 0, pauseStart: null,
+    paused: false, pausedMs: 0, pauseStart: null, bgStart: null,
     hist: [], fin: false, saved: false, t0: Date.now()
   };
 }
 
 let wl = null;
 async function wakeLock(){ try { wl = await navigator.wakeLock.request('screen'); } catch(e){} }
+
+// 앱이 화면에서 사라진 동안(전화·메시지 확인 등)은 경기 시계와 선수 시간을 멈춘다.
+// 일시정지와 달리 돌아오면 저절로 이어진다. 이미 일시정지 중이면 그쪽 계산이 이 구간까지 덮으므로 건너뛴다.
+// bgStart 를 저장해 두므로 백그라운드에서 앱이 꺼져도 다시 켤 때 init 이 마저 계산한다.
+function bgPause(){
+  if (!S || S.fin || S.paused || S.bgStart) return;
+  const now = Date.now();
+  if (S.timeMs && S.turnStart != null) {
+    S.timeMs[S.turn] = (S.timeMs[S.turn] || 0) + (now - S.turnStart);
+  }
+  S.turnStart = null;
+  S.bgStart = now;
+}
+function bgResume(){
+  if (!S || !S.bgStart) return;
+  const now = Date.now();
+  S.pausedMs = (S.pausedMs || 0) + (now - S.bgStart);
+  S.bgStart = null;
+  S.turnStart = now;
+  save();
+}
+
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     if (S) wakeLock();
-    if (S && S.timeMs && !S.fin && !S.paused) S.turnStart = Date.now();   // 백그라운드 대기 시간은 선수 시간에 넣지 않음
+    bgResume();
     queueFlush();
   }
-  else save();
+  else { bgPause(); save(); }
 });
 
 // 게임 시계: 총 경과 시간 표시 (일시정지된 시간은 제외)
@@ -591,16 +578,17 @@ setInterval(() => {
   if (!S || S.fin) return;
   const el = $('#gameClock');
   if (!el) return;
-  if (S.paused) return;   // 일시정지 중엔 갱신 안 함(고정 표시)
+  // 일시정지·백그라운드 중엔 멈춘 순간의 시간으로 고정 표시 (앱을 다시 켠 직후에도 0:00 이 되지 않게)
+  const stoppedAt = S.paused ? S.pauseStart : S.bgStart;
   const pausedMs = S.pausedMs || 0;
-  const elapsed = Date.now() - S.t0 - pausedMs;
+  const elapsed = (stoppedAt || Date.now()) - S.t0 - pausedMs;
   const secs = Math.floor(elapsed / 1000);
   const mmss = t => `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
   const limitStr = S.timeLimitMs > 0 ? mmss(Math.floor(S.timeLimitMs / 1000)) : '∞';
   el.textContent = `${mmss(secs)} / ${limitStr}`;
   el.style.color = S.timeUp ? '#e5484d' : '';
   // 시간제한: 다 되면 플래그만 세우고, 실제 종료는 이번 이닝이 끝날 때(passTurnInner)
-  if (S.timeLimitMs > 0 && !S.timeUp && elapsed >= S.timeLimitMs) {
+  if (!stoppedAt && S.timeLimitMs > 0 && !S.timeUp && elapsed >= S.timeLimitMs) {
     S.timeUp = true; save();
     toast('⏱ 시간 종료 — 이번 이닝까지!');
     speak('시간 종료. 이번 이닝까지입니다');
@@ -1269,7 +1257,7 @@ $('#btnWinNew').onclick = () => {
   if (!S) return;   // 연타로 두 번 눌려도 안전하게
   rankRemainingByRatio();
   saveGame();
-  $('#winOvl').classList.remove('on'); S = null; save(); exitFS(); show('setup');
+  $('#winOvl').classList.remove('on'); S = null; save(); syncSetup(); show('setup');
 };
 
 $('#btnWinCont').onclick = () => {
@@ -1330,7 +1318,7 @@ $('#btnEndGame').onclick = () => {
 };
 $('#btnMenuNew').onclick = () => {
   if(confirm('진행 중인 경기가 사라집니다. 새 경기를 설정할까요?')){
-    $('#menuOvl').classList.remove('on'); S = null; save(); exitFS(); show('setup');
+    $('#menuOvl').classList.remove('on'); S = null; save(); syncSetup(); show('setup');
   }
 };
 $('#btnMenuRestart').onclick = () => {
@@ -1404,11 +1392,9 @@ function init(){
 
   if (S && S.sc && !S.fin) {
     buildGameZones(); render(); show('game'); queueFlush();
-    if (S.paused) {
-      setPausedUI(true);
-      // 앱이 백그라운드/종료돼 있던 동안은 일시정지 구간에 포함시켜 시계에서 계속 제외
-      S.pauseStart = Date.now();
-    }
+    // 앱이 꺼져 있던 시간도 시계에서 뺀다 — 일시정지 중이었다면 pauseStart 를 그대로 두면 재개할 때 함께 빠진다
+    if (document.visibilityState === 'visible') bgResume();
+    if (S.paused) setPausedUI(true);
   } else if (auth) {
     syncSetup(); show('setup');
   }

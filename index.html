@@ -130,7 +130,7 @@
 <script>
 (function() {
   // 개발자 모드: ?dev=1 이면 설치 안내 건너뛰고 바로 점수판으로
-  // 설치된 앱 판정: manifest display가 fullscreen이라 standalone만 보면 안 됨
+  // 설치된 앱 판정: 예전에 fullscreen 으로 설치된 앱도 있어 standalone만 보면 안 됨
   const isStandalone = window.matchMedia('(display-mode: standalone), (display-mode: fullscreen), (display-mode: minimal-ui)').matches || window.navigator.standalone === true;
   const dev = location.search.includes('dev=1');
   if (isStandalone || dev) {
