@@ -21,6 +21,8 @@ let prefs = lsGet(LS_PREFS, { gameType:'2인', names:['','','',''], pids:[null,n
 if (prefs.cushGoal == null) prefs.cushGoal = 1;
 if (prefs.timeLimit == null) prefs.timeLimit = 0;
 if (!Array.isArray(prefs.targets3)) prefs.targets3 = [15,15,15,15];
+// 예전에 저장된 자리에 같은 선수가 겹쳐 있으면 앞자리만 남긴다 — 이제는 고를 때 자리를 맞바꾸므로 겹칠 수 없다
+prefs.pids.forEach((id, i) => { if (id && prefs.pids.indexOf(id) !== i) { prefs.pids[i] = null; prefs.names[i] = ''; } });
 let S = lsGet(LS_STATE, null);
 
 // ── 3구 / 4구 ── 설정 화면에서 고른다. 기록실과 같은 값을 쓴다(common.js).
@@ -246,7 +248,12 @@ function renderSetupCards(modeChanged = false) {
     fillSelect(i, modeChanged);
     const sel = $('#sel'+i);
     if(sel) {
-      sel.onchange = () => { applySel(i, true); $('#name'+i).value = prefs.names[i]; syncMeCard(); };
+      sel.onchange = () => {
+        // 이미 다른 자리에 있는 선수를 고르면 그 자리와 맞바꾼다 — 같은 사람이 두 자리에 앉지 못하게
+        const from = sel.value === MANUAL ? -1 : prefs.pids.indexOf(sel.value);
+        if (from >= 0 && from !== i) return swapSeats(i, from);
+        applySel(i, true); $('#name'+i).value = prefs.names[i]; syncMeCard();
+      };
       if($('#name'+i)){
         $('#name'+i).oninput = e => { prefs.names[i] = e.target.value; lsSet(LS_PREFS, prefs); };
         $('#name'+i).value = prefs.names[i];
@@ -260,6 +267,17 @@ function renderSetupCards(modeChanged = false) {
     if(sel) sel.style.display = showSel ? '' : 'none';
     if(!showSel && $('#name'+i)) $('#name'+i).style.display = '';
   }
+}
+
+// 두 자리의 선수를 맞바꾼다. 목표 점수는 선수를 따라가고(3구·4구 칸 모두), 팀전은 팀 목표를 양쪽 다시 맞춘다.
+// 지금 인원수에 안 보이는 자리와도 바꾼다 — 그래야 인원수를 늘렸을 때 겹친 선수가 나타나지 않는다.
+function swapSeats(a, b){
+  const swap = arr => { const t = arr[a]; arr[a] = arr[b]; arr[b] = t; };
+  [prefs.names, prefs.pids].forEach(swap);
+  if (prefs.gameType === '팀전') { autoTarget(a); autoTarget(b); }
+  else [prefs.targets, prefs.targets3].forEach(swap);
+  lsSet(LS_PREFS, prefs);
+  syncSetup();
 }
 
 // 선수를 바꾼 뒤 '나 / 상대' 표시만 다시 맞춘다. (카드를 통째로 다시 그리면 '직접 입력' 칸이 닫힌다)
@@ -286,7 +304,7 @@ function fillSelect(i, isUserAction = false){
   // 아직 아무도 안 고른 자리는 숨긴 빈 옵션을 맨 앞에 둔다 — 그냥 두면 브라우저가 첫 선수를
   // 골라 놓고 applySel 이 그 사람으로 저장해 버린다. ('선수 선택…' 같은 글자는 넣지 않는다)
   const blank = !cur && !prefs.names[i] ? '<option value="" style="display:none;"></option>' : '';
-  sel.innerHTML = blank + listMembers.map(m => `<option value="${esc(m.id)}">${isMine(m) ? `⭐ ${esc(m.display_name)} (나)` : esc(m.display_name)}</option>`).join('') +
+  sel.innerHTML = blank + listMembers.map(m => `<option value="${esc(m.id)}">${esc(m.display_name)}${isMine(m) ? ' ⭐' : ''}</option>`).join('') +
     `<option value="${MANUAL}">✏️ 직접 입력</option>`;
   sel.value = cur || (prefs.names[i] ? MANUAL : '');
 
@@ -470,7 +488,9 @@ $('#btnStart').onclick = () => {
   const uniqueKeys = new Set();
   for(let i=0; i<N; i++){
     if(!pNames[i]) return err.textContent = '모든 선수를 선택하거나 이름을 입력하세요';
-    const key = pPids[i] ? 'id:' + pPids[i] : 'nm:' + pNames[i];
+    // 직접 입력한 이름이 부원 이름과 같으면 그 부원으로 본다
+    const pid = pPids[i] || members.find(m => m.display_name === pNames[i])?.id;
+    const key = pid ? 'id:' + pid : 'nm:' + pNames[i];
     if(uniqueKeys.has(key)) return err.textContent = '중복된 선수가 있습니다. 각기 다른 선수를 선택해주세요.';
     uniqueKeys.add(key);
   }
@@ -492,7 +512,7 @@ $('#btnStart').onclick = () => {
     first: 0, timeLimitMs: (prefs.timeLimit ?? 0) * 60000,
     ...freshCounters(N, 0, is3() ? 0 : (prefs.cushGoal ?? 1))
   };
-  save(); buildGameZones(); render(); show('game');
+  save(); buildGameZones(); render(); show('game'); wakeLock();
   toast(`${isTeam ? TZNAMES[S.first] : S.names[S.first]} 선공으로 시작!`);
   speak('게임 시작');
 };
@@ -541,7 +561,15 @@ function freshCounters(N, turn, round){
 }
 
 let wl = null;
-async function wakeLock(){ try { wl = await navigator.wakeLock.request('screen'); } catch(e){} }
+// 화면 꺼짐 방지 — 경기 화면에 있는 동안 내내 건다. 앱이 가려지면 브라우저가 풀어 버려서 돌아올 때 다시 건다.
+async function wakeLock(){
+  if (wl && !wl.released) return;
+  try { wl = await navigator.wakeLock.request('screen'); } catch(e){}
+}
+function wakeUnlock(){
+  if (wl) wl.release().catch(()=>{});
+  wl = null;
+}
 
 // 앱이 화면에서 사라진 동안(전화·메시지 확인 등)은 경기 시계와 선수 시간을 멈춘다.
 // 일시정지와 달리 돌아오면 저절로 이어진다. 이미 일시정지 중이면 그쪽 계산이 이 구간까지 덮으므로 건너뛴다.
@@ -1257,7 +1285,7 @@ $('#btnWinNew').onclick = () => {
   if (!S) return;   // 연타로 두 번 눌려도 안전하게
   rankRemainingByRatio();
   saveGame();
-  $('#winOvl').classList.remove('on'); S = null; save(); syncSetup(); show('setup');
+  $('#winOvl').classList.remove('on'); S = null; save(); wakeUnlock(); syncSetup(); show('setup');
 };
 
 $('#btnWinCont').onclick = () => {
@@ -1318,7 +1346,7 @@ $('#btnEndGame').onclick = () => {
 };
 $('#btnMenuNew').onclick = () => {
   if(confirm('진행 중인 경기가 사라집니다. 새 경기를 설정할까요?')){
-    $('#menuOvl').classList.remove('on'); S = null; save(); syncSetup(); show('setup');
+    $('#menuOvl').classList.remove('on'); S = null; save(); wakeUnlock(); syncSetup(); show('setup');
   }
 };
 $('#btnMenuRestart').onclick = () => {
@@ -1391,7 +1419,7 @@ function init(){
   }
 
   if (S && S.sc && !S.fin) {
-    buildGameZones(); render(); show('game'); queueFlush();
+    buildGameZones(); render(); show('game'); queueFlush(); wakeLock();
     // 앱이 꺼져 있던 시간도 시계에서 뺀다 — 일시정지 중이었다면 pauseStart 를 그대로 두면 재개할 때 함께 빠진다
     if (document.visibilityState === 'visible') bgResume();
     if (S.paused) setPausedUI(true);
