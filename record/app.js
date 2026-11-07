@@ -698,21 +698,24 @@ function podiumHtml(rows, rankOf, COLS){
 }
 
 // 이미지 저장 버튼 + 안내 줄 — 포디움·순위표·홈 카드가 같은 모양을 쓴다
-const saveBtnHtml = (cls, label) => `<div style="text-align:center;margin-top:18px">
+// 버튼 둘을 나란히 놓을 때는 cls2·label2 를 준다 (안내 줄은 첫 버튼 것을 같이 쓴다)
+const saveBtnHtml = (cls, label, cls2, label2) => `<div style="text-align:center;margin-top:18px">
     <button class="mbtn ${cls}">📷 ${label}</button>
+    ${cls2 ? `<button class="mbtn ${cls2}">📷 ${label2}</button>` : ''}
     <div class="sub ${cls}-msg" style="margin:8px 0 0;min-height:1.2em"></div>
   </div>`;
 // 버튼을 누르면 make() 로 캔버스를 그려 저장한다. 그리는 동안 두 번 눌리지 않게 막는다.
-function bindSaveBtn(el, cls, make){
+// make() 는 [캔버스, 이름] 한 장, 또는 그 목록을 돌려준다. msgCls 는 안내 줄을 빌려 쓸 버튼.
+function bindSaveBtn(el, cls, make, msgCls){
   const btn = el.querySelector('.' + cls);
   if (!btn) return;
   btn.onclick = async () => {
-    const msg = el.querySelector('.' + cls + '-msg');
+    const msg = el.querySelector('.' + (msgCls || cls) + '-msg');
     btn.disabled = true;
     if (msg) { msg.textContent = '이미지 만드는 중...'; msg.style.color = 'var(--muted)'; }
     try {
-      const [cv, name] = make();
-      await saveImage(cv, name, msg);
+      const made = make();
+      await saveImages(Array.isArray(made[0]) ? made : [made], msg);
     } catch(err){
       if (msg) { msg.textContent = '저장 실패: ' + err.message; msg.style.color = '#f44336'; }
     }
@@ -1072,39 +1075,53 @@ function homeCardCanvas(s){
  *  그 외(데스크톱 등): 그냥 내려받기 (다운로드 폴더).
  *    ※ 윈도우 크롬·엣지도 파일 공유를 지원해서 canShare 만 보고 고르면 데스크톱에서
  *      저장 대신 윈도우 공유 창이 뜬다. 그래서 공유 시트는 iOS 에서만 쓴다.
+ *
+ *  여러 장을 한 번에 저장할 때: iOS 는 공유 시트 하나에 모두 담는다(시트는 버튼을 누를 때 한 번만
+ *    열 수 있다). 나머지는 한 장씩 내려받되 간격을 둔다 — 한꺼번에 누르면 브라우저가 뒷장을 버린다.
  */
-async function saveImage(cv, metricName, msgEl){
+async function saveImages(items, msgEl){   // items: [[캔버스, 이름], ...]
   const say = (t, err) => { if (msgEl) { msgEl.textContent = t; msgEl.style.color = err ? '#f44336' : 'var(--muted)'; } };
-  const blob = await new Promise(res => cv.toBlob(res, 'image/png'));
-  if (!blob) { say('이미지를 만들지 못했습니다.', true); return; }
-  // 홈 카드는 선수 이름이 파일명에 들어간다 — 파일명에 못 쓰는 글자는 걸러 낸다
-  const fname = `당동_${metricName}_${todayYmd()}.png`.replace(/\s+/g, '').replace(/[\\/:*?"<>|]/g, '');
-  const file = new File([blob], fname, { type: 'image/png' });
+  const files = [];
+  for (const [cv, metricName] of items) {
+    if (items.length > 1) say(`이미지 만드는 중... ${files.length + 1}/${items.length}`);   // 한 장에 1초 넘게 걸릴 수 있다
+    const blob = await new Promise(res => cv.toBlob(res, 'image/png'));
+    if (!blob) { say('이미지를 만들지 못했습니다.', true); return; }
+    // 홈 카드는 선수 이름이 파일명에 들어간다 — 파일명에 못 쓰는 글자는 걸러 낸다
+    const fname = `당동_${metricName}_${todayYmd()}.png`.replace(/\s+/g, '').replace(/[\\/:*?"<>|]/g, '');
+    files.push(new File([blob], fname, { type: 'image/png' }));
+  }
+  const count = files.length > 1 ? files.length + '장을 ' : '';
 
   const isAndroid = /Android/i.test(navigator.userAgent);
   // 아이패드는 사파리가 데스크톱 맥처럼 자기소개를 해서 터치 지원으로 가려낸다
   const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) ||
                 (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  const canShare = isIOS && !!(navigator.canShare && navigator.canShare({ files: [file] }));
+  const canShare = isIOS && !!(navigator.canShare && navigator.canShare({ files }));
 
-  const download = () => {
-    const url = URL.createObjectURL(blob);
+  const download = file => {
+    const url = URL.createObjectURL(file);
     const a = document.createElement('a');
-    a.href = url; a.download = fname; a.rel = 'noopener';
+    a.href = url; a.download = file.name; a.rel = 'noopener';
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   };
 
   if (!canShare) {
     try {
-      download();
-      say(isAndroid ? '갤러리에 저장했습니다. (다운로드 앨범)' : '다운로드 폴더에 저장했습니다.');
+      for (let i = 0; i < files.length; i++) {
+        if (i) {
+          say(`저장하는 중... ${i + 1}/${files.length}`);
+          await new Promise(res => setTimeout(res, 400));
+        }
+        download(files[i]);
+      }
+      say(count + (isAndroid ? '갤러리에 저장했습니다. (다운로드 앨범)' : '다운로드 폴더에 저장했습니다.'));
     } catch(e){
       say('저장에 실패했습니다.', true);
     }
     return;
   }
-  try { await navigator.share({ files: [file] }); say(''); }
+  try { await navigator.share({ files }); say(''); }
   catch(e){
     if (e && e.name === 'AbortError') { say(''); return; }   // 사용자가 취소
     say('저장에 실패했습니다.', true);
@@ -2366,7 +2383,7 @@ function renderHome(){
     <div class="hdots">${slides.map((s, i) =>
       `<button class="hdot${i === 0 ? ' on' : ''}" data-i="${i}" aria-label="${i + 1}번째 카드"></button>`
     ).join('')}</div>
-    ${slides[0].empty ? '' : saveBtnHtml('h-save', '이 카드 저장')}
+    ${slides[0].empty ? '' : saveBtnHtml('h-save', '이 카드 저장', 'h-saveall', '전체 카드 저장')}
   </div>`);
 
   const items = [...el.querySelectorAll('.hslide')];
@@ -2421,11 +2438,11 @@ function renderHome(){
   dots.forEach(d => d.onclick = () => go(+d.dataset.i));
   el.querySelectorAll('.h-tab').forEach(b => b.onclick = () => { homeTab = b.dataset.k; show('home'); });
   el.querySelectorAll('a.hname').forEach(a => a.onclick = () => showPlayer(a.dataset.p));
+  const cardImage = s => [homeCardCanvas(s), [s.name, s.label].filter(Boolean).join('_')];
   // 누른 순간 보이던 카드를 저장한다 (그리는 사이 다음 카드로 넘어가도 상관없게 idx 를 바로 읽는다)
-  bindSaveBtn(el, 'h-save', () => {
-    const s = slides[idx];
-    return [homeCardCanvas(s), [s.name, s.label].filter(Boolean).join('_')];
-  });
+  bindSaveBtn(el, 'h-save', () => cardImage(slides[idx]));
+  // 지금 탭의 카드를 전부 저장한다
+  bindSaveBtn(el, 'h-saveall', () => slides.map(cardImage), 'h-save');
 
   let sx = 0, sy = 0;
   car.addEventListener('touchstart', e => {
