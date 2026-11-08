@@ -381,7 +381,11 @@ select.field{appearance:none;background-image:
     <button class="setlink" id="setAdmin" style="display:none;">👑 관리자 메뉴</button>
     <div class="setrow"><span class="lb">🔊 점수 음성</span><button class="sw" id="setVoice" aria-label="점수 음성"></button></div>
     <!-- 알림: 본 앱·테스트 앱 모두 — common.js 의 initPushSwitch() 가 켠다 -->
-    <div class="setrow" id="setPushRow" style="display:none; flex-wrap:wrap;"><span class="lb">🔔 모임·정기전 알림</span><button class="sw" id="setPush" aria-label="모임·정기전 알림 받기"></button><div id="setPushHint" style="display:none; flex-basis:100%; font-size:.82rem; line-height:1.45; color:var(--muted);"></div></div>
+    <div class="setrow" id="setPushRow" style="display:none; flex-direction:column; align-items:stretch; gap:10px;">
+      <span class="lb">🔔 모임·정기전 알림</span>
+      <div class="setseg" id="setPush" role="group" aria-label="모임·정기전 알림"><button data-m="off">끄기</button><button data-m="quiet">알림만</button><button data-m="sound">소리·진동</button></div>
+      <div id="setPushHint" style="display:none; font-size:.82rem; line-height:1.45; color:var(--muted);"></div>
+    </div>
     <div class="setrow" style="flex-direction:column; align-items:stretch; gap:10px;">
       <span class="lb">🎨 화면 테마</span>
       <div class="setseg" id="setTheme">

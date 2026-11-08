@@ -11,7 +11,7 @@
  *  - 그 외 정적 자산(아이콘·매니페스트): 캐시 우선 + 백그라운드 갱신
  *  - 외부 출처(Supabase API 등): 가로채지 않음
  */
-const VERSION = 'v345';
+const VERSION = 'v346';
 // 배포 경로를 자동 감지 → 같은 코드가 /Dangdong/(본 앱)·/Dangdong-beta/(테스트)에서 그대로 동작.
 const BASE = new URL('.', self.location).pathname;   // 예: '/Dangdong/' 또는 '/Dangdong-beta/'
 const CACHE = 'dangdong' + BASE + VERSION;           // 스코프별 캐시 이름 분리(같은 origin이라 겹치면 안 됨)
@@ -66,23 +66,37 @@ self.addEventListener('message', e => {
  * notificationclick 에서 부르는 처리를 넣어야 한다 — git 이력에 셋 다 남아 있다.
  */
 
+// 알림 방식 — 설정 창에서 '알림만'을 고르면 'quiet' 가 적힌다(record/common.js 의 setPushMode).
+// 이름·열쇠는 그쪽과 같아야 한다. 못 읽으면 예전처럼 소리·진동과 함께 띄운다.
+const PUSH_MODE_CACHE = 'dangdong-settings';
+async function pushQuiet(){
+  try {
+    const r = await (await caches.open(PUSH_MODE_CACHE)).match(self.registration.scope + '__push-mode');
+    return !!r && (await r.text()) === 'quiet';
+  } catch (_) { return false; }
+}
+
 self.addEventListener('push', e => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; }
   catch (_) { d = { body: e.data ? e.data.text() : '' }; }
 
-  const opts = {
-    body: d.body || '',
-    icon: BASE + 'icons/icon-192.png',
-    badge: BASE + 'icons/icon-192.png',
-    tag: d.tag || 'dangdong',          // 같은 tag 는 알림이 쌓이지 않고 갱신된다
-    renotify: true,
-    // url 하나면 된다 — 누르면 그리로 간다. 투표 알림의 url 은 보내는 쪽(Edge Function)이
-    // calendar/?meetup=<id> · calendar/?event=<id> 로 만들어 준다.
-    data: { url: d.url || (BASE + 'score/') }
-  };
-
-  e.waitUntil(self.registration.showNotification(d.title || '당동', opts));
+  e.waitUntil((async () => {
+    const quiet = await pushQuiet();
+    const opts = {
+      body: d.body || '',
+      icon: BASE + 'icons/icon-192.png',
+      badge: BASE + 'icons/icon-192.png',
+      tag: d.tag || 'dangdong',          // 같은 tag 는 알림이 쌓이지 않고 갱신된다
+      // silent 와 renotify 를 함께 켜면 showNotification 이 오류를 낸다(표준) → 조용할 땐 renotify 를 끈다
+      silent: quiet,
+      renotify: !quiet,
+      // url 하나면 된다 — 누르면 그리로 간다. 투표 알림의 url 은 보내는 쪽(Edge Function)이
+      // calendar/?meetup=<id> · calendar/?event=<id> 로 만들어 준다.
+      data: { url: d.url || (BASE + 'score/') }
+    };
+    await self.registration.showNotification(d.title || '당동', opts);
+  })());
 });
 
 // 알림을 누르면: 이미 열려 있는 앱 창이 있으면 그리로, 없으면 새로 연다.

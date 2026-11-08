@@ -583,30 +583,50 @@ export function logVisit(app, getUid){
   });
 }
 
-/* 설정 창의 '알림 받기' 스위치. 점수판·기록실·캘린더 설정 창이 똑같이 쓴다.
+/* 알림 방식 — 'sound'(소리·진동, 기본) 또는 'quiet'(소리·진동 없이 알림만). 기기마다 따로 정한다.
+   알림은 앱이 꺼져 있을 때 서비스워커가 띄우는데, 서비스워커는 localStorage 를 못 읽는다.
+   그래서 둘 다 읽을 수 있는 캐시 저장소에 적어 둔다 (sw.js 의 PUSH_MODE_CACHE 와 같은 이름·열쇠여야 한다).
+   열쇠에 서비스워커 스코프를 넣어 본 앱·테스트 앱이 따로 기억한다.
+   캐시 이름이 'dangdong/' 로 시작하지 않으므로 새 버전이 옛 캐시를 지울 때 함께 지워지지 않는다. */
+const PUSH_MODE_CACHE = 'dangdong-settings';
+const pushModeKey = reg => reg.scope + '__push-mode';
+async function getPushMode(reg){
+  try {
+    const r = await (await caches.open(PUSH_MODE_CACHE)).match(pushModeKey(reg));
+    return r && (await r.text()) === 'quiet' ? 'quiet' : 'sound';
+  } catch(e){ return 'sound'; }
+}
+async function setPushMode(reg, mode){
+  await (await caches.open(PUSH_MODE_CACHE)).put(pushModeKey(reg), new Response(mode));
+}
+
+/* 설정 창의 알림 고르기(끄기 / 알림만 / 소리·진동). 점수판·기록실·캘린더 설정 창이 똑같이 쓴다.
    (예전에는 점수판에만 있어서, 기록실이나 캘린더에서 설정을 열면 스위치가 보이지 않았다)
    getUid() = 지금 로그인한 계정 id. 앱마다 로그인 정보를 들고 있는 방식이 달라 받아서 쓴다.
-   결과 안내는 스위치 바로 아래 줄(#setPushHint)에 적는다 — 토스트가 없는 화면도 있어서다. */
+   결과 안내는 바로 아래 줄(#setPushHint)에 적는다 — 토스트가 없는 화면도 있어서다. */
 export function initPushSwitch(getUid){
-  const row = document.getElementById('setPushRow'), btn = document.getElementById('setPush');
+  const row = document.getElementById('setPushRow'), seg = document.getElementById('setPush');
   const hint = document.getElementById('setPushHint');
-  if (!row || !btn) return;
+  if (!row || !seg) return;
   row.style.display = '';
+  const btns = [...seg.querySelectorAll('button')];
 
   const say = t => { if (!hint) return; hint.textContent = t || ''; hint.style.display = t ? '' : 'none'; };
-  const mark = on => btn.classList.toggle('on', !!on);
+  const mark = m => btns.forEach(b => b.classList.toggle('on', b.dataset.m === m));
+  const lock = v => btns.forEach(b => b.disabled = v);
+  const ON_MSG = { quiet: '소리·진동 없이 알림만 와요.', sound: '알림이 소리·진동과 함께 와요.' };
 
   // 이 브라우저에서는 알림을 아예 받을 수 없을 때 — 숨기지 않고 이유를 보여 준다.
   // 아이폰은 Safari 에서 '홈 화면에 추가'로 설치한 앱으로 열어야만 푸시를 쓸 수 있다.
   if (!pushUsable()) {
-    btn.disabled = true; mark(false);
+    lock(true); mark('off');
     say(/iPhone|iPad/.test(navigator.userAgent)
       ? "아이폰은 Safari 공유 버튼 → '홈 화면에 추가'로 설치한 앱에서만 알림을 켤 수 있어요."
       : '이 브라우저는 알림을 지원하지 않아요.');
     return;
   }
 
-  // 스위치는 추측하지 않고 "이 기기에 구독이 살아 있는가"를 그대로 비춘다.
+  // 추측하지 않고 "이 기기에 구독이 살아 있는가"를 그대로 비춘다. 켜져 있으면 알림 방식까지.
   // 설정을 열 때마다 다시 확인한다 — 페이지 로드 때 한 번만 읽으면 껐다 켠 뒤 옛 상태가 남는다.
   const sync = async () => {
     say('');
@@ -614,37 +634,43 @@ export function initPushSwitch(getUid){
       const reg = await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.getSubscription();
       const on = !!sub && Notification.permission === 'granted';
-      mark(on);
+      mark(on ? await getPushMode(reg) : 'off');
       if (Notification.permission === 'denied') say('브라우저에서 알림이 차단돼 있어요 — 기기 설정에서 허용해 주세요.');
       // 표에 행이 빠졌거나 계정이 바뀌었으면 조용히 지금 계정으로 맞춘다
       if (on) pushSaveSub(sub, getUid()).catch(()=>{});
-    } catch (_) { mark(false); }
+    } catch (_) { mark('off'); }
   };
   sync();
   const gear = document.getElementById('btnSettings');
   if (gear) gear.addEventListener('click', sync);   // 앱의 initSettings 가 단 onclick 과 별개로 붙는다
 
-  btn.onclick = async () => {
-    btn.disabled = true;
+  btns.forEach(b => b.onclick = async () => {
+    const m = b.dataset.m;
+    lock(true);
     try {
       const reg = await navigator.serviceWorker.ready;
-      if (await reg.pushManager.getSubscription()) {          // 켜져 있으면 → 끄기
-        await pushDetach();
-        mark(false); say('알림을 껐습니다.');
+      const sub = await reg.pushManager.getSubscription();
+      if (m === 'off') {
+        if (sub) await pushDetach();
+        mark('off'); say('알림을 껐습니다.');
         return;
       }
-      if (Notification.permission === 'denied') {
-        say('브라우저에서 알림이 차단돼 있어요 — 기기 설정에서 허용해 주세요.'); return;
+      // 방식부터 적어 둔다 — 켜자마자 오는 알림도 고른 방식대로 울리게
+      await setPushMode(reg, m);
+      if (!sub || Notification.permission !== 'granted') {      // 꺼져 있으면 → 켜기
+        if (Notification.permission === 'denied') {
+          say('브라우저에서 알림이 차단돼 있어요 — 기기 설정에서 허용해 주세요.'); return;
+        }
+        if (await Notification.requestPermission() !== 'granted') { say('알림 권한이 없어 켜지 못했습니다.'); return; }
+        // pushAttach 는 표에 못 넣으면 false 를 준다 — 켜진 것처럼 보이고 보낼 주소는 없는 상태를 만들지 않는다
+        if (!await pushAttach(getUid())) { say('알림을 켜지 못했습니다. 잠시 뒤 다시 시도해 주세요.'); sync(); return; }
       }
-      if (await Notification.requestPermission() !== 'granted') { say('알림 권한이 없어 켜지 못했습니다.'); return; }
-      // pushAttach 는 표에 못 넣으면 false 를 준다 — 스위치만 켜지고 보낼 주소는 없는 상태를 만들지 않는다
-      if (!await pushAttach(getUid())) { say('알림을 켜지 못했습니다. 잠시 뒤 다시 시도해 주세요.'); sync(); return; }
-      mark(true); say('알림을 켰습니다.');
+      mark(m); say(ON_MSG[m]);
     } catch (e) {
       say('알림 설정 실패: ' + (e && e.message || e));
       sync();
-    } finally { btn.disabled = false; }
-  };
+    } finally { lock(false); }
+  });
 }
 
 // ── 팀 설정 모달 (팀 참가 / 팀 만들기 / 팀장: 코드·이름 변경·팀원 내보내기) ──
